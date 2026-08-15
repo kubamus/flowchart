@@ -1,4 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useHotkey, useHotkeys } from "@tanstack/react-hotkeys";
+import type { Hotkey, UseHotkeyDefinition } from "@tanstack/react-hotkeys";
 import type {
 	ChangeEvent,
 	CSSProperties,
@@ -319,7 +321,7 @@ const INITIAL_EDGES: DiagramEdge[] = [
 const TOOL_ITEMS: Array<{
 	id: Tool;
 	label: string;
-	shortcut: string;
+	shortcut: Hotkey;
 	icon: IconName;
 }> = [
 	{ id: "select", label: "Select", shortcut: "V", icon: "cursor" },
@@ -843,8 +845,9 @@ function ToolButton({
 		<button
 			aria-label={label}
 			className={`tool-button${active ? " active" : ""}`}
+			data-tooltip={`${label}${shortcut ? ` · ${shortcut}` : ""}`}
+			data-tooltip-placement="right"
 			onClick={onClick}
-			title={`${label}${shortcut ? ` · ${shortcut}` : ""}`}
 			type="button"
 		>
 			<Icon name={icon} />
@@ -2135,168 +2138,332 @@ function FlwchrtEditor() {
 		toggleLockSelection,
 	]);
 
-	const handleKeyDown = useCallback(
-		(event: KeyboardEvent) => {
-			const target = event.target as HTMLElement;
-			const isTyping =
-				target.tagName === "INPUT" ||
-				target.tagName === "TEXTAREA" ||
-				target.tagName === "SELECT" ||
-				target.isContentEditable;
-			if (event.key === "Escape") {
-				if (editingNodeId) finishEditing(false);
-				else if (commandOpen) {
-					setCommandOpen(false);
-					setCommandQuery("");
-				} else if (contextMenu) setContextMenu(null);
-				return;
-			}
-			if (commandOpen && isTyping) {
-				if (event.key === "ArrowDown") {
-					event.preventDefault();
-					setCommandIndex((index) =>
-						commandItems.length ? (index + 1) % commandItems.length : 0,
-					);
-					return;
-				}
-				if (event.key === "ArrowUp") {
-					event.preventDefault();
-					setCommandIndex((index) =>
-						commandItems.length
-							? (index - 1 + commandItems.length) % commandItems.length
-							: 0,
-					);
-					return;
-				}
-				if (event.key === "Enter") {
-					event.preventDefault();
-					const command = commandItems[commandIndex];
-					if (command) {
-						command.action();
+	const moveCommandIndex = useCallback(
+		(direction: 1 | -1) => {
+			setCommandIndex((index) =>
+				commandItems.length
+					? (index + direction + commandItems.length) % commandItems.length
+					: 0,
+			);
+		},
+		[commandItems.length],
+	);
+
+	const executeCommand = useCallback(() => {
+		const command = commandItems[commandIndex];
+		if (!command) return;
+		command.action();
+		setCommandOpen(false);
+		setCommandQuery("");
+	}, [commandIndex, commandItems]);
+
+	const nudgeSelection = useCallback(
+		(delta: Point) => {
+			if (!selectedIds.length) return;
+			const nextNodes = nodesRef.current.map((node) =>
+				selectedIds.includes(node.id) && !node.locked
+					? { ...node, x: node.x + delta.x, y: node.y + delta.y }
+					: node,
+			);
+			recordSnapshot(nextNodes, edgesRef.current);
+		},
+		[recordSnapshot, selectedIds],
+	);
+
+	const editorHotkeys = useMemo<Array<UseHotkeyDefinition>>(
+		() => [
+			{
+				hotkey: "Escape",
+				callback: () => {
+					if (editingNodeId) finishEditing(false);
+					else if (commandOpen) {
 						setCommandOpen(false);
 						setCommandQuery("");
-					}
-					return;
-				}
-			}
-			if (event.code === "Space" && !isTyping) {
-				event.preventDefault();
-				setSpacePressed(true);
-				return;
-			}
-			if (isTyping) return;
-			const modifier = event.metaKey || event.ctrlKey;
-			if (modifier && event.key.toLowerCase() === "z") {
-				event.preventDefault();
-				if (event.shiftKey) redo();
-				else undo();
-				return;
-			}
-			if (modifier && event.key.toLowerCase() === "y") {
-				event.preventDefault();
-				redo();
-				return;
-			}
-			if (modifier && event.key.toLowerCase() === "k") {
-				event.preventDefault();
-				setCommandOpen(true);
-				return;
-			}
-			if (modifier && event.key.toLowerCase() === "c") {
-				event.preventDefault();
-				copySelected();
-				return;
-			}
-			if (modifier && event.key.toLowerCase() === "v") {
-				event.preventDefault();
-				pasteClipboard();
-				return;
-			}
-			if (modifier && event.key.toLowerCase() === "d") {
-				event.preventDefault();
-				duplicateSelected();
-				return;
-			}
-			if (modifier && event.key.toLowerCase() === "g") {
-				event.preventDefault();
-				if (event.shiftKey) ungroupSelection();
-				else groupSelection();
-				return;
-			}
-			if (event.key === "Delete" || event.key === "Backspace") {
-				event.preventDefault();
-				deleteSelected();
-				return;
-			}
-			if (event.key === "?") {
-				setCommandOpen(true);
-				setCommandQuery("shortcut");
-				return;
-			}
-			const key = event.key.toLowerCase();
-			const shortcutTool = TOOL_ITEMS.find(
-				(item) => item.shortcut.toLowerCase() === key,
-			);
-			if (shortcutTool) {
-				setTool(shortcutTool.id);
-				return;
-			}
-			if (
-				selectedIds.length &&
-				["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)
-			) {
-				event.preventDefault();
-				const amount = event.shiftKey ? 8 : 1;
-				const delta: Point =
-					event.key === "ArrowLeft"
-						? { x: -amount, y: 0 }
-						: event.key === "ArrowRight"
-							? { x: amount, y: 0 }
-							: event.key === "ArrowUp"
-								? { x: 0, y: -amount }
-								: { x: 0, y: amount };
-				const nextNodes = nodesRef.current.map((node) =>
-					selectedIds.includes(node.id) && !node.locked
-						? { ...node, x: node.x + delta.x, y: node.y + delta.y }
-						: node,
-				);
-				recordSnapshot(nextNodes, edgesRef.current);
-			}
-		},
+					} else if (contextMenu) setContextMenu(null);
+				},
+				options: {
+					enabled: Boolean(editingNodeId || commandOpen || contextMenu),
+					ignoreInputs: false,
+					meta: {
+						name: "Close active panel",
+						description: "Exit editing or dismiss an open menu",
+					},
+				},
+			},
+			{
+				hotkey: "ArrowDown",
+				callback: () => moveCommandIndex(1),
+				options: {
+					enabled: commandOpen,
+					ignoreInputs: false,
+					meta: {
+						name: "Next command",
+						description: "Move down in the command palette",
+					},
+				},
+			},
+			{
+				hotkey: "ArrowUp",
+				callback: () => moveCommandIndex(-1),
+				options: {
+					enabled: commandOpen,
+					ignoreInputs: false,
+					meta: {
+						name: "Previous command",
+						description: "Move up in the command palette",
+					},
+				},
+			},
+			{
+				hotkey: "Enter",
+				callback: executeCommand,
+				options: {
+					enabled: commandOpen,
+					ignoreInputs: false,
+					meta: {
+						name: "Run command",
+						description: "Run the selected command",
+					},
+				},
+			},
+			{
+				hotkey: "Mod+Shift+Z",
+				callback: redo,
+				options: {
+					meta: { name: "Redo", description: "Redo the last change" },
+				},
+			},
+			{
+				hotkey: "Mod+Z",
+				callback: undo,
+				options: {
+					meta: { name: "Undo", description: "Undo the last change" },
+				},
+			},
+			{
+				hotkey: "Mod+Y",
+				callback: redo,
+				options: {
+					meta: { name: "Redo", description: "Redo the last change" },
+				},
+			},
+			{
+				hotkey: "Mod+K",
+				callback: () => setCommandOpen(true),
+				options: {
+					meta: {
+						name: "Command palette",
+						description: "Open commands and search",
+					},
+				},
+			},
+			{
+				hotkey: "Mod+C",
+				callback: copySelected,
+				options: {
+					meta: {
+						name: "Copy selection",
+						description: "Copy selected elements",
+					},
+				},
+			},
+			{
+				hotkey: "Mod+V",
+				callback: pasteClipboard,
+				options: {
+					meta: { name: "Paste", description: "Paste copied elements" },
+				},
+			},
+			{
+				hotkey: "Mod+D",
+				callback: duplicateSelected,
+				options: {
+					meta: { name: "Duplicate", description: "Duplicate the selection" },
+				},
+			},
+			{
+				hotkey: "Mod+Shift+G",
+				callback: ungroupSelection,
+				options: {
+					meta: { name: "Ungroup", description: "Ungroup the selection" },
+				},
+			},
+			{
+				hotkey: "Mod+G",
+				callback: groupSelection,
+				options: {
+					meta: { name: "Group", description: "Group the selection" },
+				},
+			},
+			{
+				hotkey: "Delete",
+				callback: deleteSelected,
+				options: {
+					meta: { name: "Delete", description: "Delete the selection" },
+				},
+			},
+			{
+				hotkey: "Backspace",
+				callback: deleteSelected,
+				options: {
+					meta: { name: "Delete", description: "Delete the selection" },
+				},
+			},
+			{
+				hotkey: { key: "/", shift: true },
+				callback: () => {
+					setCommandOpen(true);
+					setCommandQuery("shortcut");
+				},
+				options: {
+					meta: {
+						name: "Keyboard shortcuts",
+						description: "Open the shortcut reference",
+					},
+				},
+			},
+			...TOOL_ITEMS.map((item) => ({
+				hotkey: item.shortcut,
+				callback: () => setTool(item.id),
+				options: {
+					meta: {
+						name: `${item.label} tool`,
+						description: `Activate the ${item.label.toLowerCase()} tool`,
+					},
+				},
+			})),
+			{
+				hotkey: "ArrowLeft",
+				callback: () => nudgeSelection({ x: -1, y: 0 }),
+				options: {
+					enabled: !commandOpen && selectedIds.length > 0,
+					meta: {
+						name: "Nudge left",
+						description: "Move selection one pixel left",
+					},
+				},
+			},
+			{
+				hotkey: "Shift+ArrowLeft",
+				callback: () => nudgeSelection({ x: -8, y: 0 }),
+				options: {
+					enabled: !commandOpen && selectedIds.length > 0,
+					meta: {
+						name: "Nudge left",
+						description: "Move selection eight pixels left",
+					},
+				},
+			},
+			{
+				hotkey: "ArrowRight",
+				callback: () => nudgeSelection({ x: 1, y: 0 }),
+				options: {
+					enabled: !commandOpen && selectedIds.length > 0,
+					meta: {
+						name: "Nudge right",
+						description: "Move selection one pixel right",
+					},
+				},
+			},
+			{
+				hotkey: "Shift+ArrowRight",
+				callback: () => nudgeSelection({ x: 8, y: 0 }),
+				options: {
+					enabled: !commandOpen && selectedIds.length > 0,
+					meta: {
+						name: "Nudge right",
+						description: "Move selection eight pixels right",
+					},
+				},
+			},
+			{
+				hotkey: "ArrowUp",
+				callback: () => nudgeSelection({ x: 0, y: -1 }),
+				options: {
+					enabled: !commandOpen && selectedIds.length > 0,
+					meta: {
+						name: "Nudge up",
+						description: "Move selection one pixel up",
+					},
+				},
+			},
+			{
+				hotkey: "Shift+ArrowUp",
+				callback: () => nudgeSelection({ x: 0, y: -8 }),
+				options: {
+					enabled: !commandOpen && selectedIds.length > 0,
+					meta: {
+						name: "Nudge up",
+						description: "Move selection eight pixels up",
+					},
+				},
+			},
+			{
+				hotkey: "ArrowDown",
+				callback: () => nudgeSelection({ x: 0, y: 1 }),
+				options: {
+					enabled: !commandOpen && selectedIds.length > 0,
+					meta: {
+						name: "Nudge down",
+						description: "Move selection one pixel down",
+					},
+				},
+			},
+			{
+				hotkey: "Shift+ArrowDown",
+				callback: () => nudgeSelection({ x: 0, y: 8 }),
+				options: {
+					enabled: !commandOpen && selectedIds.length > 0,
+					meta: {
+						name: "Nudge down",
+						description: "Move selection eight pixels down",
+					},
+				},
+			},
+		],
 		[
-			commandIndex,
-			commandItems,
 			commandOpen,
 			contextMenu,
 			copySelected,
 			deleteSelected,
 			duplicateSelected,
 			editingNodeId,
+			executeCommand,
 			finishEditing,
 			groupSelection,
+			moveCommandIndex,
+			nudgeSelection,
 			pasteClipboard,
 			redo,
-			recordSnapshot,
-			selectedIds,
+			selectedIds.length,
 			undo,
 			ungroupSelection,
 		],
 	);
 
-	useEffect(() => {
-		window.addEventListener("keydown", handleKeyDown);
-		return () => window.removeEventListener("keydown", handleKeyDown);
-	}, [handleKeyDown]);
+	useHotkeys(editorHotkeys, {
+		conflictBehavior: "allow",
+		ignoreInputs: true,
+	});
+	useHotkey("Space", () => setSpacePressed(true), {
+		conflictBehavior: "allow",
+		ignoreInputs: true,
+		meta: {
+			name: "Pan canvas",
+			description: "Hold Space while dragging to pan",
+		},
+		requireReset: true,
+	});
+	useHotkey("Space", () => setSpacePressed(false), {
+		conflictBehavior: "allow",
+		eventType: "keyup",
+		ignoreInputs: true,
+	});
 
 	useEffect(() => {
-		const handleKeyUp = (event: KeyboardEvent) => {
-			if (event.code === "Space") setSpacePressed(false);
-		};
 		const handleWindowBlur = () => setSpacePressed(false);
-		window.addEventListener("keyup", handleKeyUp);
 		window.addEventListener("blur", handleWindowBlur);
 		return () => {
-			window.removeEventListener("keyup", handleKeyUp);
 			window.removeEventListener("blur", handleWindowBlur);
 		};
 	}, []);
@@ -2453,6 +2620,8 @@ function FlwchrtEditor() {
 					<button
 						aria-label="Open account menu"
 						className="avatar-button"
+						data-tooltip="Account menu"
+						data-tooltip-placement="bottom"
 						onClick={() => showToast("Account menu coming soon")}
 						type="button"
 					>
@@ -2530,19 +2699,29 @@ function FlwchrtEditor() {
 						<div className="canvas-actions">
 							<button
 								className="canvas-action"
+								data-tooltip="Arrange diagram"
+								data-tooltip-placement="top"
 								onClick={autoArrange}
 								type="button"
 							>
 								<Icon name="move" size={14} />
 								Arrange
 							</button>
-							<button className="canvas-action" onClick={fitView} type="button">
+							<button
+								className="canvas-action"
+								data-tooltip="Fit diagram to view"
+								data-tooltip-placement="top"
+								onClick={fitView}
+								type="button"
+							>
 								<Icon name="fit" size={14} />
 								Fit
 							</button>
 							<button
 								aria-pressed={showGrid}
 								className={`canvas-action${showGrid ? " is-on" : ""}`}
+								data-tooltip="Show or hide grid"
+								data-tooltip-placement="top"
 								onClick={() => setShowGrid((value) => !value)}
 								type="button"
 							>
@@ -2552,6 +2731,8 @@ function FlwchrtEditor() {
 							<button
 								aria-pressed={snapToGrid}
 								className={`canvas-action${snapToGrid ? " is-on" : ""}`}
+								data-tooltip="Toggle snap to grid"
+								data-tooltip-placement="top"
 								onClick={() => setSnapToGrid((value) => !value)}
 								type="button"
 							>
@@ -2678,6 +2859,8 @@ function FlwchrtEditor() {
 						>
 							<button
 								aria-label="Zoom out"
+								data-tooltip="Zoom out"
+								data-tooltip-placement="top"
 								onClick={() => zoomCanvas(0.86)}
 								type="button"
 							>
@@ -2686,6 +2869,8 @@ function FlwchrtEditor() {
 							<button
 								aria-label="Reset zoom to 100%"
 								className="zoom-label"
+								data-tooltip="Reset zoom to 100%"
+								data-tooltip-placement="top"
 								onClick={resetZoom}
 								type="button"
 							>
@@ -2693,6 +2878,8 @@ function FlwchrtEditor() {
 							</button>
 							<button
 								aria-label="Zoom in"
+								data-tooltip="Zoom in"
+								data-tooltip-placement="top"
 								onClick={() => zoomCanvas(1.16)}
 								type="button"
 							>
@@ -2990,6 +3177,8 @@ function NodeView({
 						<button
 							aria-label={node.collapsed ? "Expand group" : "Collapse group"}
 							className="group-collapse"
+							data-tooltip={node.collapsed ? "Expand group" : "Collapse group"}
+							data-tooltip-placement="top"
 							onClick={(event) => {
 								event.stopPropagation();
 								onCollapse(node.id);
@@ -3051,6 +3240,8 @@ function NodeView({
 						<button
 							aria-label="Rotate node"
 							className="rotate-handle"
+							data-tooltip="Rotate node"
+							data-tooltip-placement="top"
 							onPointerDown={(event) => onBeginRotate(event, node)}
 							type="button"
 						>
@@ -3060,6 +3251,8 @@ function NodeView({
 					<button
 						aria-label="Resize node"
 						className="resize-handle"
+						data-tooltip="Resize node"
+						data-tooltip-placement="top"
 						onPointerDown={(event) => onBeginResize(event, node)}
 						type="button"
 					/>
@@ -3297,6 +3490,8 @@ function PropertiesPanel({
 				<button
 					aria-label="Inspector settings"
 					className="icon-button"
+					data-tooltip="Inspector settings"
+					data-tooltip-placement="left"
 					onClick={() => undefined}
 					type="button"
 				>
@@ -3591,6 +3786,8 @@ function LayersPanel({
 				<button
 					aria-label="Layer options"
 					className="icon-button"
+					data-tooltip="Layer options"
+					data-tooltip-placement="left"
 					onClick={() => undefined}
 					type="button"
 				>
@@ -3682,6 +3879,8 @@ function LayerRow({
 				aria-label={`${node.title} visibility`}
 				aria-pressed={!node.hidden}
 				className={`layer-icon-button${node.hidden ? " active" : ""}`}
+				data-tooltip={node.hidden ? "Show layer" : "Hide layer"}
+				data-tooltip-placement="left"
 				onClick={() => onToggleVisibility(node.id)}
 				type="button"
 			>
@@ -3690,6 +3889,8 @@ function LayerRow({
 			<button
 				aria-label={`${node.title} lock`}
 				className={`layer-icon-button${node.locked ? " active" : ""}`}
+				data-tooltip={node.locked ? "Unlock layer" : "Lock layer"}
+				data-tooltip-placement="left"
 				onClick={() => onToggleLock(node.id)}
 				type="button"
 			>
