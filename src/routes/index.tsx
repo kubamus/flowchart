@@ -44,6 +44,7 @@ interface DiagramNode {
 	rotation: number;
 	parentId?: string;
 	collapsed?: boolean;
+	hidden?: boolean;
 }
 
 interface DiagramEdge {
@@ -701,17 +702,118 @@ const getEdgeGeometry = (
 };
 
 const getVisibleNodes = (nodes: DiagramNode[]) => {
-	const collapsedParents = new Set(
-		nodes
-			.filter((node) => node.type === "group" && node.collapsed)
-			.map((node) => node.id),
+	const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+	return nodes.filter((node) => {
+		if (node.hidden) return false;
+		let parentId = node.parentId;
+		const visitedParents = new Set<string>();
+		while (parentId) {
+			if (visitedParents.has(parentId)) return false;
+			visitedParents.add(parentId);
+			const parent = nodeMap.get(parentId);
+			if (!parent) break;
+			if (parent.hidden || parent.collapsed) return false;
+			parentId = parent.parentId;
+		}
+		return true;
+	});
+};
+
+interface Rect {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+}
+
+const getNodeRect = (node: DiagramNode): Rect => ({
+	x: node.x,
+	y: node.y,
+	width: node.width,
+	height: node.height,
+});
+
+const containsRect = (outer: Rect, inner: Rect) =>
+	inner.x >= outer.x &&
+	inner.y >= outer.y &&
+	inner.x + inner.width <= outer.x + outer.width &&
+	inner.y + inner.height <= outer.y + outer.height;
+
+const rectanglesOverlap = (first: Rect, second: Rect) =>
+	first.x < second.x + second.width &&
+	first.x + first.width > second.x &&
+	first.y < second.y + second.height &&
+	first.y + first.height > second.y;
+
+const hasOverlappingGroups = (nodes: DiagramNode[]) => {
+	const groups = nodes.filter((node) => node.type === "group");
+	return groups.some((group, index) =>
+		groups
+			.slice(index + 1)
+			.some((other) =>
+				rectanglesOverlap(getNodeRect(group), getNodeRect(other)),
+			),
 	);
-	return nodes.filter(
-		(node) =>
-			node.type === "group" ||
-			!node.parentId ||
-			!collapsedParents.has(node.parentId),
-	);
+};
+
+const findContainingGroup = (
+	node: DiagramNode,
+	nodes: DiagramNode[],
+): DiagramNode | undefined => {
+	const nodeRect = getNodeRect(node);
+	return nodes
+		.filter(
+			(group) =>
+				group.type === "group" &&
+				group.id !== node.id &&
+				containsRect(getNodeRect(group), nodeRect),
+		)
+		.sort(
+			(first, second) =>
+				first.width * first.height - second.width * second.height,
+		)[0];
+};
+
+const syncGroupMembership = (nodes: DiagramNode[]) => {
+	const groups = nodes.filter((node) => node.type === "group");
+	let changed = false;
+	const nextNodes = nodes.map((node) => {
+		if (node.type === "group") return node;
+		const currentParent = groups.find((group) => group.id === node.parentId);
+		const currentParentContains = currentParent
+			? containsRect(getNodeRect(currentParent), getNodeRect(node))
+			: false;
+		const containingGroup = currentParentContains
+			? currentParent
+			: findContainingGroup(node, groups);
+		const nextParentId = containingGroup?.id;
+		if (node.parentId === nextParentId) return node;
+		changed = true;
+		const nextNode = { ...node };
+		if (nextParentId) nextNode.parentId = nextParentId;
+		else delete nextNode.parentId;
+		return nextNode;
+	});
+	return changed ? nextNodes : nodes;
+};
+
+const getDescendantIds = (nodes: DiagramNode[], parentId: string) => {
+	const descendants = new Set<string>();
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (const node of nodes) {
+			if (
+				node.parentId &&
+				(node.parentId === parentId || descendants.has(node.parentId)) &&
+				!descendants.has(node.id)
+			) {
+				descendants.add(node.id);
+				changed = true;
+			}
+		}
+	}
+	return descendants;
 };
 
 const getBounds = (nodes: DiagramNode[]) => {
@@ -768,6 +870,7 @@ function FlowcraftEditor() {
 	);
 	const [guides, setGuides] = useState<GuideState>({});
 	const [connection, setConnection] = useState<ConnectionState | null>(null);
+	const [noteCursor, setNoteCursor] = useState<Point | null>(null);
 	const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
 	const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
 	const [commandOpen, setCommandOpen] = useState(false);
@@ -815,6 +918,10 @@ function FlowcraftEditor() {
 
 	const recordSnapshot = useCallback(
 		(nextNodes = nodesRef.current, nextEdges = edgesRef.current) => {
+			if (hasOverlappingGroups(nextNodes)) {
+				showToast("Groups cannot overlap");
+				return false;
+			}
 			nodesRef.current = nextNodes;
 			edgesRef.current = nextEdges;
 			setNodes(nextNodes);
@@ -828,8 +935,9 @@ function FlowcraftEditor() {
 			historyIndexRef.current = nextIndex;
 			setHistoryIndex(nextIndex);
 			markSaving();
+			return true;
 		},
-		[markSaving],
+		[markSaving, showToast],
 	);
 
 	const updateNodesLive = useCallback(
@@ -931,6 +1039,10 @@ function FlowcraftEditor() {
 	}, []);
 
 	useEffect(() => {
+		if (tool !== "note") setNoteCursor(null);
+	}, [tool]);
+
+	useEffect(() => {
 		if (commandOpen || commandQuery) setCommandIndex(0);
 	}, [commandOpen, commandQuery]);
 
@@ -1011,6 +1123,17 @@ function FlowcraftEditor() {
 		(nodeId: string, title: string) => {
 			updateNodesLive((current) =>
 				current.map((node) => (node.id === nodeId ? { ...node, title } : node)),
+			);
+		},
+		[updateNodesLive],
+	);
+
+	const handleNodeSubtitleChange = useCallback(
+		(nodeId: string, subtitle: string) => {
+			updateNodesLive((current) =>
+				current.map((node) =>
+					node.id === nodeId ? { ...node, subtitle } : node,
+				),
 			);
 		},
 		[updateNodesLive],
@@ -1099,7 +1222,7 @@ function FlowcraftEditor() {
 			event.preventDefault();
 			if (event.ctrlKey || event.metaKey) {
 				if (event.deltaY === 0) return;
-				const factor = event.deltaY > 0 ? 0.92 : 1.08;
+				const factor = event.deltaY > 0 ? 0.96 : 1.04;
 				zoomAt(event.clientX, event.clientY, factor);
 				return;
 			}
@@ -1210,9 +1333,14 @@ function FlowcraftEditor() {
 				: alreadySelected
 					? selectedIds
 					: [nodeId];
+			const movingIds = new Set(ids);
+			if (node.type === "group") {
+				for (const descendantId of getDescendantIds(nodesRef.current, node.id))
+					movingIds.add(descendantId);
+			}
 			const initial = new Map(
 				nodesRef.current
-					.filter((item) => ids.includes(item.id) && !item.locked)
+					.filter((item) => movingIds.has(item.id) && !item.locked)
 					.map((item) => [item.id, { x: item.x, y: item.y }]),
 			);
 			interactionRef.current = {
@@ -1264,6 +1392,9 @@ function FlowcraftEditor() {
 
 	const handleCanvasPointerMove = useCallback(
 		(event: ReactPointerEvent<HTMLDivElement>) => {
+			const world = getWorldPoint(event, viewportRef.current, viewRef.current);
+			if (tool === "note" && !spacePressed) setNoteCursor(world);
+			else if (noteCursor) setNoteCursor(null);
 			const interaction = interactionRef.current;
 			if (!interaction || interaction.pointerId !== event.pointerId) {
 				if (connection) {
@@ -1271,11 +1402,7 @@ function FlowcraftEditor() {
 						current
 							? {
 									...current,
-									current: getWorldPoint(
-										event,
-										viewportRef.current,
-										viewRef.current,
-									),
+									current: world,
 								}
 							: current,
 					);
@@ -1290,7 +1417,6 @@ function FlowcraftEditor() {
 				});
 				return;
 			}
-			const world = getWorldPoint(event, viewportRef.current, viewRef.current);
 			if (interaction.mode === "box") {
 				setSelectionBox((current) =>
 					current ? { ...current, current: world } : current,
@@ -1300,19 +1426,43 @@ function FlowcraftEditor() {
 			if (interaction.mode === "resize") {
 				const deltaX = world.x - interaction.startWorld.x;
 				const deltaY = world.y - interaction.startWorld.y;
-				const width = Math.max(
+				const groupChildren =
+					interaction.initial.type === "group"
+						? nodesRef.current.filter(
+								(node) =>
+									node.parentId === interaction.initial.id &&
+									node.type !== "group",
+							)
+						: [];
+				const minimumWidth = Math.max(
 					120,
+					...groupChildren.map(
+						(child) => child.x + child.width - interaction.initial.x + 28,
+					),
+				);
+				const minimumHeight = Math.max(
+					56,
+					...groupChildren.map(
+						(child) => child.y + child.height - interaction.initial.y + 86,
+					),
+				);
+				const width = Math.max(
+					minimumWidth,
 					snap(interaction.initial.width + deltaX, snapToGrid),
 				);
 				const height = Math.max(
-					56,
+					minimumHeight,
 					snap(interaction.initial.height + deltaY, snapToGrid),
 				);
-				updateNodesLive((current) =>
-					current.map((node) =>
-						node.id === interaction.nodeId ? { ...node, width, height } : node,
-					),
+				const nextNodes = nodesRef.current.map((node) =>
+					node.id === interaction.nodeId ? { ...node, width, height } : node,
 				);
+				if (
+					interaction.initial.type === "group" &&
+					hasOverlappingGroups(nextNodes)
+				)
+					return;
+				updateNodesLive(() => nextNodes);
 				return;
 			}
 			if (interaction.mode === "rotate") {
@@ -1358,21 +1508,30 @@ function FlowcraftEditor() {
 					y: snapped.y - primary.y,
 				};
 				setGuides(snapped.guides);
-				updateNodesLive((current) =>
-					current.map((node) => {
-						const initial = interaction.initial.get(node.id);
-						return initial
-							? {
-									...node,
-									x: snap(initial.x + adjustedDelta.x, snapToGrid),
-									y: snap(initial.y + adjustedDelta.y, snapToGrid),
-								}
-							: node;
-					}),
-				);
+				const nextNodes = nodesRef.current.map((node) => {
+					const initial = interaction.initial.get(node.id);
+					return initial
+						? {
+								...node,
+								x: snap(initial.x + adjustedDelta.x, snapToGrid),
+								y: snap(initial.y + adjustedDelta.y, snapToGrid),
+							}
+						: node;
+				});
+				if (hasOverlappingGroups(nextNodes)) return;
+				updateNodesLive(() => nextNodes);
 			}
 		},
-		[connection, getSmartSnap, snapToGrid, updateNodesLive, updateView],
+		[
+			connection,
+			getSmartSnap,
+			noteCursor,
+			snapToGrid,
+			spacePressed,
+			tool,
+			updateNodesLive,
+			updateView,
+		],
 	);
 
 	const handleCanvasPointerUp = useCallback(
@@ -1443,7 +1602,11 @@ function FlowcraftEditor() {
 				interaction.mode === "resize" ||
 				interaction.mode === "rotate"
 			) {
-				recordSnapshot(nodesRef.current, edgesRef.current);
+				const nextNodes =
+					interaction.mode === "move"
+						? syncGroupMembership(nodesRef.current)
+						: nodesRef.current;
+				recordSnapshot(nextNodes, edgesRef.current);
 				setGuides({});
 			}
 			interactionRef.current = null;
@@ -1464,6 +1627,8 @@ function FlowcraftEditor() {
 	const handleCanvasPointerDown = useCallback(
 		(event: ReactPointerEvent<HTMLDivElement>) => {
 			if (event.button !== 0 && event.button !== 1) return;
+			const activeElement = document.activeElement;
+			if (activeElement instanceof HTMLInputElement) activeElement.blur();
 			const isPanning = event.button === 1 || tool === "hand" || spacePressed;
 			const element = event.target as Element;
 			if (
@@ -1492,6 +1657,8 @@ function FlowcraftEditor() {
 					locked: false,
 					rotation: 0,
 				};
+				const containingGroup = findContainingGroup(newNode, nodesRef.current);
+				if (containingGroup) newNode.parentId = containingGroup.id;
 				recordSnapshot([...nodesRef.current, newNode], edgesRef.current);
 				setSelectedIds([newNode.id]);
 				setSelectedEdgeId(null);
@@ -1572,26 +1739,41 @@ function FlowcraftEditor() {
 		const idMap = new Map(
 			data.nodes.map((node) => [node.id, makeId(node.type)]),
 		);
-		const pastedNodes = data.nodes.map((node) => ({
-			...node,
-			id: idMap.get(node.id) ?? makeId(node.type),
-			x: node.x + 32,
-			y: node.y + 32,
-			parentId:
-				node.parentId && idMap.has(node.parentId)
-					? idMap.get(node.parentId)
-					: undefined,
-		}));
+		const createPastedNodes = (offset: number) =>
+			data.nodes.map((node) => ({
+				...node,
+				id: idMap.get(node.id) ?? makeId(node.type),
+				x: node.x + offset,
+				y: node.y + offset,
+				parentId:
+					node.parentId && idMap.has(node.parentId)
+						? idMap.get(node.parentId)
+						: undefined,
+			}));
+		let offset = 32;
+		let pastedNodes = createPastedNodes(offset);
+		while (
+			hasOverlappingGroups([...nodesRef.current, ...pastedNodes]) &&
+			offset < 512
+		) {
+			offset += 32;
+			pastedNodes = createPastedNodes(offset);
+		}
+		if (hasOverlappingGroups([...nodesRef.current, ...pastedNodes])) {
+			showToast("Groups cannot overlap");
+			return;
+		}
 		const pastedEdges = data.edges.map((edge) => ({
 			...edge,
 			id: makeId("edge"),
 			source: idMap.get(edge.source) ?? edge.source,
 			target: idMap.get(edge.target) ?? edge.target,
 		}));
-		recordSnapshot(
-			[...nodesRef.current, ...pastedNodes],
-			[...edgesRef.current, ...pastedEdges],
-		);
+		const nextNodes = syncGroupMembership([
+			...nodesRef.current,
+			...pastedNodes,
+		]);
+		recordSnapshot(nextNodes, [...edgesRef.current, ...pastedEdges]);
 		setSelectedIds(pastedNodes.map((node) => node.id));
 		showToast("Pasted selection");
 	}, [recordSnapshot, showToast]);
@@ -1607,6 +1789,36 @@ function FlowcraftEditor() {
 			showToast("Select two or more nodes to group");
 			return;
 		}
+		const existingGroups = nodesRef.current.filter(
+			(node) => node.type === "group",
+		);
+		const containingGroups = new Set(
+			groupable
+				.map((node) => findContainingGroup(node, existingGroups)?.id)
+				.filter((id): id is string => Boolean(id)),
+		);
+		if (containingGroups.size === 1) {
+			const containingGroupId = [...containingGroups][0];
+			const group = existingGroups.find(
+				(node) => node.id === containingGroupId,
+			);
+			if (
+				group &&
+				groupable.every((node) =>
+					containsRect(getNodeRect(group), getNodeRect(node)),
+				)
+			) {
+				const groupedIds = new Set(groupable.map((node) => node.id));
+				const nextNodes = nodesRef.current.map((node) =>
+					groupedIds.has(node.id) ? { ...node, parentId: group.id } : node,
+				);
+				if (groupable.some((node) => node.parentId !== group.id))
+					recordSnapshot(nextNodes, edgesRef.current);
+				setSelectedIds([group.id]);
+				showToast("Selection added to group");
+				return;
+			}
+		}
 		const bounds = getBounds(groupable);
 		const group: DiagramNode = {
 			id: makeId("group"),
@@ -1621,6 +1833,14 @@ function FlowcraftEditor() {
 			locked: false,
 			rotation: 0,
 		};
+		if (
+			existingGroups.some((existingGroup) =>
+				rectanglesOverlap(getNodeRect(group), getNodeRect(existingGroup)),
+			)
+		) {
+			showToast("Groups cannot overlap");
+			return;
+		}
 		const groupedIds = new Set(groupable.map((node) => node.id));
 		const nextNodes = nodesRef.current.map((node) =>
 			groupedIds.has(node.id) ? { ...node, parentId: group.id } : node,
@@ -1806,6 +2026,8 @@ function FlowcraftEditor() {
 				try {
 					const parsed: unknown = JSON.parse(contents);
 					if (!isDiagramFile(parsed)) throw new Error("Invalid diagram");
+					if (hasOverlappingGroups(parsed.nodes))
+						throw new Error("Overlapping groups");
 					recordSnapshot(parsed.nodes, parsed.edges);
 					setSelectedIds([]);
 					showToast("Diagram imported");
@@ -2332,25 +2554,36 @@ function FlowcraftEditor() {
 					</div>
 					<div
 						aria-label="Infinite diagram canvas"
-						className={`canvas-viewport${tool === "hand" ? " hand-mode" : ""}${spacePressed ? " space-mode" : ""}${showGrid ? " show-grid" : ""}`}
+						className={`canvas-viewport${tool === "hand" ? " hand-mode" : ""}${tool === "note" ? " note-mode" : ""}${spacePressed ? " space-mode" : ""}${showGrid ? " show-grid" : ""}`}
 						onContextMenu={handleContextMenu}
 						onPointerDown={handleCanvasPointerDown}
 						onPointerMove={handleCanvasPointerMove}
+						onPointerLeave={() => setNoteCursor(null)}
 						onPointerUp={handleCanvasPointerUp}
 						ref={viewportRef}
 						role="application"
 						style={viewportStyle}
 					>
-						<div className="canvas-watermark">
-							<span className="watermark-icon">
-								<Icon name="command" size={13} />
-							</span>
-							Space-drag or two-finger pan · pinch to zoom
-						</div>
 						<div className="diagram-stage" style={stageStyle}>
 							<div className="stage-origin" aria-hidden="true">
 								<span>0, 0</span>
 							</div>
+							{tool === "note" && !spacePressed && noteCursor ? (
+								<div
+									aria-hidden="true"
+									className="note-cursor-preview"
+									style={{
+										left: noteCursor.x - 96,
+										top: noteCursor.y - 50,
+									}}
+								>
+									<span className="note-cursor-icon">
+										<Icon name="note" size={13} />
+									</span>
+									<strong>New note</strong>
+									<small>Add a thought</small>
+								</div>
+							) : null}
 							{guides.x !== undefined ? (
 								<div
 									className="alignment-guide vertical-guide"
@@ -2423,7 +2656,7 @@ function FlowcraftEditor() {
 							) : null}
 						</div>
 						<MiniMap
-							nodes={nodes}
+							nodes={visibleNodes}
 							onClick={handleMinimapClick}
 							viewport={minimapViewport}
 						/>
@@ -2496,7 +2729,15 @@ function FlowcraftEditor() {
 						onChangeTitle={(title) =>
 							selectedNode && handleNodeTitleChange(selectedNode.id, title)
 						}
+						onChangeSubtitle={(subtitle) =>
+							selectedNode &&
+							handleNodeSubtitleChange(selectedNode.id, subtitle)
+						}
 						onCommitTitle={() => {
+							if (selectedNode)
+								recordSnapshot(nodesRef.current, edgesRef.current);
+						}}
+						onCommitSubtitle={() => {
 							if (selectedNode)
 								recordSnapshot(nodesRef.current, edgesRef.current);
 						}}
@@ -2525,9 +2766,12 @@ function FlowcraftEditor() {
 							if (target) updateNodePatch(id, { locked: !target.locked });
 						}}
 						onToggleVisibility={(id) =>
-							showToast(
-								`Visibility controls for ${nodeMap.get(id)?.title ?? "layer"}`,
-							)
+							(() => {
+								const target = nodesRef.current.find((node) => node.id === id);
+								if (!target) return;
+								updateNodePatch(id, { hidden: !target.hidden });
+								showToast(target.hidden ? "Layer shown" : "Layer hidden");
+							})()
 						}
 					/>
 				</aside>
@@ -2779,32 +3023,36 @@ function NodeView({
 							<div className="node-subtitle">{node.subtitle}</div>
 						) : null}
 					</div>
-					{showHandles && !node.locked ? (
-						<>
-							<div className="connection-points" aria-hidden="true">
-								<span className="connection-point point-top" />
-								<span className="connection-point point-right" />
-								<span className="connection-point point-bottom" />
-								<span className="connection-point point-left" />
-							</div>
-							<button
-								aria-label="Rotate node"
-								className="rotate-handle"
-								onPointerDown={(event) => onBeginRotate(event, node)}
-								type="button"
-							>
-								<Icon name="rotate" size={12} />
-							</button>
-							<button
-								aria-label="Resize node"
-								className="resize-handle"
-								onPointerDown={(event) => onBeginResize(event, node)}
-								type="button"
-							/>
-						</>
-					) : null}
 				</>
 			)}
+			{showHandles && !node.locked ? (
+				<>
+					{isGroup ? null : (
+						<div className="connection-points" aria-hidden="true">
+							<span className="connection-point point-top" />
+							<span className="connection-point point-right" />
+							<span className="connection-point point-bottom" />
+							<span className="connection-point point-left" />
+						</div>
+					)}
+					{isGroup ? null : (
+						<button
+							aria-label="Rotate node"
+							className="rotate-handle"
+							onPointerDown={(event) => onBeginRotate(event, node)}
+							type="button"
+						>
+							<Icon name="rotate" size={12} />
+						</button>
+					)}
+					<button
+						aria-label="Resize node"
+						className="resize-handle"
+						onPointerDown={(event) => onBeginResize(event, node)}
+						type="button"
+					/>
+				</>
+			) : null}
 		</div>
 	);
 }
@@ -2885,21 +3133,47 @@ function InspectorNumberField({
 		if (document.activeElement !== inputRef.current) setDraft(displayValue);
 	}, [displayValue]);
 
+	const commitValue = useCallback(
+		(parsed: number) => {
+			if (!Number.isFinite(parsed)) {
+				setDraft(displayValue);
+				return;
+			}
+			const nextValue = clamp(parsed, min ?? -Infinity, max ?? Infinity);
+			setDraft(String(Math.round(nextValue)));
+			if (nextValue !== value) onCommit(nextValue);
+		},
+		[displayValue, max, min, onCommit, value],
+	);
+
 	const commit = useCallback(() => {
 		const rawValue = inputRef.current?.value ?? draft;
 		if (rawValue.trim() === "") {
 			setDraft(displayValue);
 			return;
 		}
-		const parsed = Number(rawValue);
-		if (!Number.isFinite(parsed)) {
-			setDraft(displayValue);
-			return;
-		}
-		const nextValue = clamp(parsed, min ?? -Infinity, max ?? Infinity);
-		setDraft(String(Math.round(nextValue)));
-		if (nextValue !== value) onCommit(nextValue);
-	}, [displayValue, draft, max, min, onCommit, value]);
+		commitValue(Number(rawValue));
+	}, [commitValue, displayValue, draft]);
+
+	const stepValue = useCallback(
+		(direction: 1 | -1) => {
+			const rawValue = inputRef.current?.value ?? draft;
+			const currentValue = Number(rawValue);
+			const baseValue = Number.isFinite(currentValue) ? currentValue : value;
+			commitValue(baseValue + direction);
+			inputRef.current?.focus({ preventScroll: true });
+		},
+		[commitValue, draft, value],
+	);
+
+	const handleStepKeyDown = useCallback(
+		(event: ReactKeyboardEvent<HTMLButtonElement>, direction: 1 | -1) => {
+			if (event.key !== "Enter" && event.key !== " ") return;
+			event.preventDefault();
+			stepValue(direction);
+		},
+		[stepValue],
+	);
 
 	return (
 		<div className="input-with-suffix">
@@ -2935,6 +3209,24 @@ function InspectorNumberField({
 				onInput={(event) => setDraft(event.currentTarget.value)}
 				onChange={(event) => setDraft(event.currentTarget.value)}
 			/>
+			<div className="number-stepper">
+				<button
+					aria-label={`Increase ${id}`}
+					onClick={() => stepValue(1)}
+					onKeyDown={(event) => handleStepKeyDown(event, 1)}
+					type="button"
+				>
+					<Icon name="chevronUp" size={10} />
+				</button>
+				<button
+					aria-label={`Decrease ${id}`}
+					onClick={() => stepValue(-1)}
+					onKeyDown={(event) => handleStepKeyDown(event, -1)}
+					type="button"
+				>
+					<Icon name="chevronDown" size={10} />
+				</button>
+			</div>
 			<span>{suffix}</span>
 		</div>
 	);
@@ -2949,7 +3241,9 @@ function PropertiesPanel({
 	onChangeColor,
 	onChangeEdgeStyle,
 	onChangeTitle,
+	onChangeSubtitle,
 	onCommitTitle,
+	onCommitSubtitle,
 	onUpdateNode,
 	onUpdateEdgeLabel,
 	onDuplicate,
@@ -2967,7 +3261,9 @@ function PropertiesPanel({
 	onChangeColor: (color: NodeColor) => void;
 	onChangeEdgeStyle: (style: EdgeStyle) => void;
 	onChangeTitle: (title: string) => void;
+	onChangeSubtitle: (subtitle: string) => void;
 	onCommitTitle: () => void;
+	onCommitSubtitle: () => void;
 	onUpdateNode: (patch: Partial<DiagramNode>) => void;
 	onUpdateEdgeLabel: (label: string) => void;
 	onDuplicate: () => void;
@@ -3004,6 +3300,16 @@ function PropertiesPanel({
 							onBlur={onCommitTitle}
 							onChange={(event) => onChangeTitle(event.target.value)}
 							value={node.title}
+						/>
+					</div>
+					<div className="inspector-section title-section">
+						<label htmlFor="node-subtitle">Description</label>
+						<input
+							id="node-subtitle"
+							onBlur={onCommitSubtitle}
+							onChange={(event) => onChangeSubtitle(event.target.value)}
+							placeholder="Add a thought"
+							value={node.subtitle}
 						/>
 					</div>
 					<div className="inspector-section">
@@ -3343,7 +3649,9 @@ function LayerRow({
 	onToggleVisibility: (id: string) => void;
 }) {
 	return (
-		<div className={`layer-row${selected ? " selected" : ""}`}>
+		<div
+			className={`layer-row${selected ? " selected" : ""}${node.hidden ? " hidden" : ""}`}
+		>
 			<button
 				className="layer-main"
 				onClick={(event) => onSelect(node.id, event.shiftKey)}
@@ -3359,7 +3667,8 @@ function LayerRow({
 			</button>
 			<button
 				aria-label={`${node.title} visibility`}
-				className="layer-icon-button"
+				aria-pressed={!node.hidden}
+				className={`layer-icon-button${node.hidden ? " active" : ""}`}
 				onClick={() => onToggleVisibility(node.id)}
 				type="button"
 			>
@@ -3617,7 +3926,8 @@ const isDiagramNode = (value: unknown): value is DiagramNode => {
 		typeof node.subtitle === "string" &&
 		isNodeColor(node.color) &&
 		typeof node.locked === "boolean" &&
-		typeof node.rotation === "number"
+		typeof node.rotation === "number" &&
+		(node.hidden === undefined || typeof node.hidden === "boolean")
 	);
 };
 
