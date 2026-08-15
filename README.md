@@ -1,6 +1,8 @@
-Welcome to your new TanStack Start app!
+# Flwchrt
 
-# Getting Started
+Flwchrt is a fast, browser-based visual editor for flowcharts, system diagrams, mind maps, and process diagrams.
+
+## Getting Started
 
 To run this application:
 

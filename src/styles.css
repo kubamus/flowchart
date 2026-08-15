@@ -566,6 +566,10 @@ kbd {
 	cursor: crosshair;
 }
 
+.canvas-viewport.text-mode {
+	cursor: text;
+}
+
 .diagram-stage {
 	position: absolute;
 	top: 0;
@@ -797,7 +801,22 @@ kbd {
 	height: calc(100% + 2px);
 	border: 8px solid var(--node-accent);
 	border-radius: 50%;
-	clip-path: inset(0 50% 0 0);
+	-webkit-mask-image: linear-gradient(
+		90deg,
+		#000 0%,
+		#000 26%,
+		rgb(0 0 0 / 0.92) 38%,
+		rgb(0 0 0 / 0.42) 48%,
+		transparent 56%
+	);
+	mask-image: linear-gradient(
+		90deg,
+		#000 0%,
+		#000 26%,
+		rgb(0 0 0 / 0.92) 38%,
+		rgb(0 0 0 / 0.42) 48%,
+		transparent 56%
+	);
 	content: "";
 	pointer-events: none;
 }
@@ -868,6 +887,26 @@ kbd {
 	color: #8a7c55;
 	font-size: 10px;
 	font-weight: 550;
+}
+
+.text-cursor-preview {
+	width: 168px;
+	height: 56px;
+	padding: 10px 13px;
+	border-color: #a9b9d4;
+	border-radius: 7px;
+	background: rgba(246, 249, 255, 0.84);
+	box-shadow: 0 5px 12px rgba(41, 63, 93, 0.06);
+}
+
+.text-cursor-preview .note-cursor-icon {
+	margin-bottom: 4px;
+	color: #48668f;
+	background: rgba(173, 195, 232, 0.42);
+}
+
+.text-cursor-preview small {
+	color: #71809a;
 }
 
 .diagram-node.node-decision {
@@ -1431,6 +1470,7 @@ kbd {
 }
 
 .inspector-section input,
+.inspector-section textarea,
 .layer-search,
 .input-with-suffix {
 	width: 100%;
@@ -1445,6 +1485,13 @@ kbd {
 
 .inspector-section input {
 	padding: 0 9px;
+}
+
+.inspector-section textarea {
+	min-height: 64px;
+	padding: 8px 9px;
+	resize: vertical;
+	line-height: 1.35;
 }
 
 .inspector-section input:hover,

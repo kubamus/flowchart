@@ -13,7 +13,7 @@ export const Route = createRootRoute({
 				content: "width=device-width, initial-scale=1",
 			},
 			{
-				title: "Flowcraft — visual diagram editor",
+				title: "Flwchrt — visual diagram editor",
 			},
 		],
 		links: [

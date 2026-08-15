@@ -9,7 +9,7 @@ import type {
 } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-export const Route = createFileRoute("/")({ component: FlowcraftEditor });
+export const Route = createFileRoute("/")({ component: FlwchrtEditor });
 
 type Tool = "select" | "hand" | "connector" | "note" | "text";
 type NodeType =
@@ -853,7 +853,7 @@ function ToolButton({
 	);
 }
 
-function FlowcraftEditor() {
+function FlwchrtEditor() {
 	const [nodes, setNodes] = useState<DiagramNode[]>(INITIAL_NODES);
 	const [edges, setEdges] = useState<DiagramEdge[]>(INITIAL_EDGES);
 	const [selectedIds, setSelectedIds] = useState<string[]>(["node-payment"]);
@@ -880,7 +880,7 @@ function FlowcraftEditor() {
 	const [savePulse, setSavePulse] = useState(0);
 	const [toast, setToast] = useState<string | null>(null);
 	const [inspectorQuery, setInspectorQuery] = useState("");
-	const [projectName, setProjectName] = useState("Checkout flow");
+	const [projectName, setProjectName] = useState("Flwchrt");
 	const [viewportSize, setViewportSize] = useState({ width: 900, height: 700 });
 	const [exportOpen, setExportOpen] = useState(false);
 
@@ -1004,7 +1004,7 @@ function FlowcraftEditor() {
 			setSaveState("saved");
 			try {
 				window.localStorage.setItem(
-					"flowcraft-diagram",
+					"flwchrt-diagram",
 					JSON.stringify({ nodes: nodesRef.current, edges: edgesRef.current }),
 				);
 			} catch {
@@ -1039,7 +1039,7 @@ function FlowcraftEditor() {
 	}, []);
 
 	useEffect(() => {
-		if (tool !== "note") setNoteCursor(null);
+		if (tool !== "note" && tool !== "text") setNoteCursor(null);
 	}, [tool]);
 
 	useEffect(() => {
@@ -1393,7 +1393,8 @@ function FlowcraftEditor() {
 	const handleCanvasPointerMove = useCallback(
 		(event: ReactPointerEvent<HTMLDivElement>) => {
 			const world = getWorldPoint(event, viewportRef.current, viewRef.current);
-			if (tool === "note" && !spacePressed) setNoteCursor(world);
+			if ((tool === "note" || tool === "text") && !spacePressed)
+				setNoteCursor(world);
 			else if (noteCursor) setNoteCursor(null);
 			const interaction = interactionRef.current;
 			if (!interaction || interaction.pointerId !== event.pointerId) {
@@ -1628,11 +1629,18 @@ function FlowcraftEditor() {
 		(event: ReactPointerEvent<HTMLDivElement>) => {
 			if (event.button !== 0 && event.button !== 1) return;
 			const activeElement = document.activeElement;
-			if (activeElement instanceof HTMLInputElement) activeElement.blur();
+			if (
+				activeElement instanceof HTMLInputElement ||
+				activeElement instanceof HTMLTextAreaElement ||
+				activeElement instanceof HTMLSelectElement
+			)
+				activeElement.blur();
 			const isPanning = event.button === 1 || tool === "hand" || spacePressed;
 			const element = event.target as Element;
+			const isCreationTool = tool === "note" || tool === "text";
 			if (
 				!isPanning &&
+				!isCreationTool &&
 				(element.closest("[data-node-id]") || element.closest("[data-edge-id]"))
 			)
 				return;
@@ -1647,7 +1655,7 @@ function FlowcraftEditor() {
 				const newNode: DiagramNode = {
 					id: makeId(type),
 					type,
-					x: snap(world.x - 96, snapToGrid),
+					x: snap(world.x - (type === "note" ? 96 : 84), snapToGrid),
 					y: snap(world.y - (type === "note" ? 50 : 28), snapToGrid),
 					width: type === "note" ? 192 : 168,
 					height: type === "note" ? 100 : 56,
@@ -1975,7 +1983,7 @@ function FlowcraftEditor() {
 
 	const exportJson = useCallback(() => {
 		downloadFile(
-			"checkout-flow.flowcraft.json",
+			"flwchrt-diagram.flwchrt.json",
 			JSON.stringify(
 				{ version: 1, nodes: nodesRef.current, edges: edgesRef.current },
 				null,
@@ -2352,18 +2360,18 @@ function FlowcraftEditor() {
 						<span />
 						<span />
 					</div>
-					<span className="brand-name">flowcraft</span>
+					<span className="brand-name">Flwchrt</span>
 				</div>
 				<div className="project-breadcrumb">
 					<span>Projects</span>
 					<Icon name="chevronRight" size={13} />
-					<span>Checkout flow</span>
+					<span>Flwchrt</span>
 					<button
 						aria-label="Rename project"
 						className="project-name-button"
 						onClick={() =>
 							setProjectName(
-								projectName === "Checkout flow" ? "Checkout flow" : projectName,
+								projectName === "Flwchrt" ? "Flwchrt" : projectName,
 							)
 						}
 						type="button"
@@ -2422,7 +2430,7 @@ function FlowcraftEditor() {
 								</button>
 								<button onClick={exportJson} type="button">
 									<Icon name="copy" size={14} />
-									Export editable JSON<span>flowcraft</span>
+									Export editable JSON<span>Flwchrt</span>
 								</button>
 								<div className="menu-divider" />
 								<button
@@ -2554,7 +2562,7 @@ function FlowcraftEditor() {
 					</div>
 					<div
 						aria-label="Infinite diagram canvas"
-						className={`canvas-viewport${tool === "hand" ? " hand-mode" : ""}${tool === "note" ? " note-mode" : ""}${spacePressed ? " space-mode" : ""}${showGrid ? " show-grid" : ""}`}
+						className={`canvas-viewport${tool === "hand" ? " hand-mode" : ""}${tool === "note" ? " note-mode" : ""}${tool === "text" ? " text-mode" : ""}${spacePressed ? " space-mode" : ""}${showGrid ? " show-grid" : ""}`}
 						onContextMenu={handleContextMenu}
 						onPointerDown={handleCanvasPointerDown}
 						onPointerMove={handleCanvasPointerMove}
@@ -2568,20 +2576,24 @@ function FlowcraftEditor() {
 							<div className="stage-origin" aria-hidden="true">
 								<span>0, 0</span>
 							</div>
-							{tool === "note" && !spacePressed && noteCursor ? (
+							{(tool === "note" || tool === "text") &&
+							!spacePressed &&
+							noteCursor ? (
 								<div
 									aria-hidden="true"
-									className="note-cursor-preview"
+									className={`note-cursor-preview${tool === "text" ? " text-cursor-preview" : ""}`}
 									style={{
-										left: noteCursor.x - 96,
-										top: noteCursor.y - 50,
+										left: noteCursor.x - (tool === "text" ? 84 : 96),
+										top: noteCursor.y - (tool === "text" ? 28 : 50),
 									}}
 								>
 									<span className="note-cursor-icon">
-										<Icon name="note" size={13} />
+										<Icon name={tool === "text" ? "text" : "note"} size={13} />
 									</span>
-									<strong>New note</strong>
-									<small>Add a thought</small>
+									<strong>{tool === "text" ? "New text" : "New note"}</strong>
+									<small>
+										{tool === "text" ? "Click to type" : "Add a thought"}
+									</small>
 								</div>
 							) : null}
 							{guides.x !== undefined ? (
@@ -3304,11 +3316,12 @@ function PropertiesPanel({
 					</div>
 					<div className="inspector-section title-section">
 						<label htmlFor="node-subtitle">Description</label>
-						<input
+						<textarea
 							id="node-subtitle"
 							onBlur={onCommitSubtitle}
 							onChange={(event) => onChangeSubtitle(event.target.value)}
 							placeholder="Add a thought"
+							rows={3}
 							value={node.subtitle}
 						/>
 					</div>
