@@ -1,20 +1,23 @@
 import type {
 	CSSProperties,
 	KeyboardEvent as ReactKeyboardEvent,
-	MouseEvent as ReactMouseEvent,
 	PointerEvent as ReactPointerEvent,
 } from "react";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import {
 	nodeTypeLabel,
+	MINIMAP_HEIGHT,
+	MINIMAP_WIDTH,
 	WORLD_HEIGHT,
 	WORLD_WIDTH,
 } from "../../features/editor/data";
 import { getEdgeGeometry } from "../../features/editor/geometry";
+import { clamp } from "../../features/editor/helpers";
 import type {
 	ConnectionState,
 	DiagramEdge,
 	DiagramNode,
+	Point,
 } from "../../features/editor/types";
 import { Icon } from "../Icon";
 
@@ -71,6 +74,7 @@ export function EdgeLayer({
 							key={edge.id}
 							onPointerDown={(event) => {
 								event.stopPropagation();
+								event.preventDefault();
 								onSelect(edge.id);
 							}}
 						>
@@ -162,6 +166,7 @@ export function NodeView({
 			aria-label={`${node.title}, ${nodeTypeLabel(node.type)}${node.locked ? ", locked" : ""}`}
 			className={`diagram-node node-${node.type} color-${node.color}${selected ? " selected" : ""}${node.locked ? " locked" : ""}${node.collapsed ? " collapsed" : ""}`}
 			data-node-id={node.id}
+			draggable={false}
 			onDoubleClick={(event) => {
 				event.stopPropagation();
 				onDoubleClick(node);
@@ -191,6 +196,7 @@ export function NodeView({
 								event.stopPropagation();
 								onCollapse(node.id);
 							}}
+							onPointerDown={(event) => event.stopPropagation()}
 							type="button"
 						>
 							<Icon
@@ -271,35 +277,207 @@ export function NodeView({
 }
 
 export function MiniMap({
+	edges,
 	nodes,
+	selectedIds,
+	zoom,
+	onFit,
+	onFocusNode,
+	onNavigate,
+	onViewportDrag,
+	origin,
+	scale,
 	viewport,
-	onClick,
 }: {
+	edges: DiagramEdge[];
 	nodes: DiagramNode[];
+	origin: Point;
+	scale: number;
 	viewport: { x: number; y: number; width: number; height: number };
-	onClick: (event: ReactMouseEvent<HTMLButtonElement>) => void;
+	selectedIds: string[];
+	zoom: number;
+	onFit: () => void;
+	onFocusNode: (nodeId: string) => void;
+	onNavigate: (point: Point) => void;
+	onViewportDrag: (delta: Point) => void;
 }) {
-	const scale = 174 / WORLD_WIDTH;
+	const dragRef = useRef<{
+		mode: "canvas" | "viewport";
+		pointerId: number;
+		lastPoint: Point;
+	} | null>(null);
+	const blockCount = nodes.filter((node) => node.type !== "group").length;
+	const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+	const getLocalPoint = useCallback(
+		(event: ReactPointerEvent<HTMLDivElement>) => {
+			const rect = event.currentTarget.getBoundingClientRect();
+			return {
+				x: clamp(event.clientX - rect.left, 0, MINIMAP_WIDTH),
+				y: clamp(event.clientY - rect.top, 0, MINIMAP_HEIGHT),
+			};
+		},
+		[],
+	);
+	const handlePointerDown = useCallback(
+		(event: ReactPointerEvent<HTMLDivElement>) => {
+			if (event.button !== 0) return;
+			event.preventDefault();
+			event.stopPropagation();
+			const point = getLocalPoint(event);
+			const target = event.target as Element;
+			const isViewport = Boolean(target.closest(".minimap-viewport"));
+			dragRef.current = {
+				mode: isViewport ? "viewport" : "canvas",
+				pointerId: event.pointerId,
+				lastPoint: point,
+			};
+			event.currentTarget.setPointerCapture(event.pointerId);
+			if (!isViewport) onNavigate(point);
+		},
+		[getLocalPoint, onNavigate],
+	);
+	const handlePointerMove = useCallback(
+		(event: ReactPointerEvent<HTMLDivElement>) => {
+			const drag = dragRef.current;
+			if (!drag || drag.pointerId !== event.pointerId) return;
+			event.preventDefault();
+			event.stopPropagation();
+			const point = getLocalPoint(event);
+			const delta = {
+				x: point.x - drag.lastPoint.x,
+				y: point.y - drag.lastPoint.y,
+			};
+			if (delta.x === 0 && delta.y === 0) return;
+			if (drag.mode === "viewport") onViewportDrag(delta);
+			else onNavigate(point);
+			drag.lastPoint = point;
+		},
+		[getLocalPoint, onNavigate, onViewportDrag],
+	);
+	const handlePointerEnd = useCallback(
+		(event: ReactPointerEvent<HTMLDivElement>) => {
+			if (dragRef.current?.pointerId !== event.pointerId) return;
+			event.stopPropagation();
+			if (event.currentTarget.hasPointerCapture(event.pointerId))
+				event.currentTarget.releasePointerCapture(event.pointerId);
+			dragRef.current = null;
+		},
+		[],
+	);
+	const handleNodeKeyDown = useCallback(
+		(event: ReactKeyboardEvent<HTMLButtonElement>, nodeId: string) => {
+			if (event.key !== "Enter" && event.key !== " ") return;
+			event.preventDefault();
+			event.stopPropagation();
+			onFocusNode(nodeId);
+		},
+		[onFocusNode],
+	);
+	const toMinimapPoint = useCallback(
+		(point: Point) => ({
+			x: (point.x - origin.x) * scale,
+			y: (point.y - origin.y) * scale,
+		}),
+		[origin.x, origin.y, scale],
+	);
+	const getMinimapRect = useCallback(
+		(node: DiagramNode) => {
+			const point = toMinimapPoint(node);
+			return {
+				left: point.x,
+				top: point.y,
+				width: node.width * scale,
+				height: node.height * scale,
+			};
+		},
+		[scale, toMinimapPoint],
+	);
+
 	return (
-		<button
-			aria-label="Diagram minimap"
+		<section
+			aria-label="Diagram overview"
 			className="minimap"
-			onClick={onClick}
-			type="button"
+			onPointerDown={(event) => event.stopPropagation()}
 		>
-			<div className="minimap-canvas">
+			<div className="minimap-header">
+				<div className="minimap-title">
+					<strong>Overview</strong>
+					<span>{blockCount} blocks</span>
+				</div>
+				<button
+					aria-label="Fit diagram to view"
+					className="minimap-fit"
+					data-tooltip="Fit diagram to view"
+					data-tooltip-placement="top"
+					onClick={onFit}
+					type="button"
+				>
+					<Icon name="fit" size={13} />
+				</button>
+			</div>
+			<div
+				className="minimap-canvas"
+				onPointerCancel={handlePointerEnd}
+				onPointerDown={handlePointerDown}
+				onPointerMove={handlePointerMove}
+				onPointerUp={handlePointerEnd}
+			>
+				<svg
+					aria-hidden="true"
+					className="minimap-edges"
+					height={MINIMAP_HEIGHT}
+					viewBox={`0 0 ${MINIMAP_WIDTH} ${MINIMAP_HEIGHT}`}
+					width={MINIMAP_WIDTH}
+				>
+					{edges.map((edge) => {
+						const source = nodeMap.get(edge.source);
+						const target = nodeMap.get(edge.target);
+						if (!source || !target) return null;
+						const sourcePoint = toMinimapPoint({
+							x: source.x + source.width / 2,
+							y: source.y + source.height / 2,
+						});
+						const targetPoint = toMinimapPoint({
+							x: target.x + target.width / 2,
+							y: target.y + target.height / 2,
+						});
+						return (
+							<line
+								className="minimap-edge"
+								key={edge.id}
+								x1={sourcePoint.x}
+								x2={targetPoint.x}
+								y1={sourcePoint.y}
+								y2={targetPoint.y}
+							/>
+						);
+					})}
+				</svg>
+				{nodes
+					.filter((node) => node.type === "group")
+					.map((node) => (
+						<span
+							aria-hidden="true"
+							className={`minimap-group minimap-${node.color}`}
+							key={node.id}
+							style={getMinimapRect(node)}
+						/>
+					))}
 				{nodes
 					.filter((node) => node.type !== "group")
 					.map((node) => (
-						<span
-							className={`minimap-node minimap-${node.color}`}
+						<button
+							aria-label={`Focus ${node.title}`}
+							className={`minimap-node minimap-${node.color}${selectedIds.includes(node.id) ? " selected" : ""}`}
 							key={node.id}
-							style={{
-								left: node.x * scale,
-								top: node.y * scale,
-								width: node.width * scale,
-								height: node.height * scale,
+							onClick={(event) => {
+								event.stopPropagation();
+								onFocusNode(node.id);
 							}}
+							onKeyDown={(event) => handleNodeKeyDown(event, node.id)}
+							onPointerDown={(event) => event.stopPropagation()}
+							style={getMinimapRect(node)}
+							type="button"
 						/>
 					))}
 				<span
@@ -312,10 +490,13 @@ export function MiniMap({
 					}}
 				/>
 			</div>
-			<div className="minimap-label">
-				<Icon name="move" size={12} />
-				Overview
+			<div className="minimap-footer">
+				<span>
+					<Icon name="move" size={11} />
+					Drag to pan
+				</span>
+				<strong>{Math.round(zoom * 100)}%</strong>
 			</div>
-		</button>
+		</section>
 	);
 }

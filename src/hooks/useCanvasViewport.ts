@@ -1,7 +1,9 @@
-import type { MouseEvent as ReactMouseEvent } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { WORLD_WIDTH } from "../features/editor/data";
-import { getBounds } from "../features/editor/geometry";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	MINIMAP_HEIGHT,
+	MINIMAP_WIDTH,
+} from "../features/editor/data";
+import { getBounds, getVisibleNodes } from "../features/editor/geometry";
 import { clamp } from "../features/editor/helpers";
 import type { DiagramNode, Point } from "../features/editor/types";
 
@@ -13,8 +15,6 @@ interface UseCanvasViewportOptions {
 interface ViewState extends Point {
 	zoom: number;
 }
-
-const MINIMAP_WIDTH = 174;
 
 export function useCanvasViewport({ nodes, onFit }: UseCanvasViewportOptions) {
 	const [view, setViewState] = useState<ViewState>({
@@ -56,7 +56,7 @@ export function useCanvasViewport({ nodes, onFit }: UseCanvasViewportOptions) {
 			y: viewport.clientHeight / 2 - (bounds.minY + bounds.height / 2) * zoom,
 			zoom,
 		});
-		onFit("Fit to selection");
+		onFit("Diagram fitted");
 	}, [nodes, onFit, updateView]);
 
 	const zoomAt = useCallback(
@@ -136,24 +136,39 @@ export function useCanvasViewport({ nodes, onFit }: UseCanvasViewportOptions) {
 		return () => viewport.removeEventListener("wheel", handleWheel);
 	}, [updateView, zoomAt]);
 
-	const minimapScale = MINIMAP_WIDTH / WORLD_WIDTH;
-	const minimapViewport = {
-		x: (-view.x / view.zoom) * minimapScale,
-		y: (-view.y / view.zoom) * minimapScale,
-		width: (viewportSize.width / view.zoom) * minimapScale,
-		height: (viewportSize.height / view.zoom) * minimapScale,
-	};
+	const visibleNodes = useMemo(() => getVisibleNodes(nodes), [nodes]);
+	const minimapLayout = useMemo(() => {
+		const bounds = getBounds(visibleNodes);
+		const padding = 80;
+		const width = Math.max(bounds.width + padding * 2, 1);
+		const height = Math.max(bounds.height + padding * 2, 1);
+
+		return {
+			origin: {
+				x: bounds.minX - padding,
+				y: bounds.minY - padding,
+			},
+			scale: Math.min(MINIMAP_WIDTH / width, MINIMAP_HEIGHT / height),
+		};
+	}, [visibleNodes]);
+	const minimapScale = minimapLayout.scale;
+	const minimapOrigin = minimapLayout.origin;
 	const canvasPosition = {
 		x: -view.x / view.zoom,
 		y: -view.y / view.zoom,
 	};
+	const minimapViewport = {
+		x: (canvasPosition.x - minimapOrigin.x) * minimapScale,
+		y: (canvasPosition.y - minimapOrigin.y) * minimapScale,
+		width: (viewportSize.width / view.zoom) * minimapScale,
+		height: (viewportSize.height / view.zoom) * minimapScale,
+	};
 
-	const handleMinimapClick = useCallback(
-		(event: ReactMouseEvent<HTMLButtonElement>) => {
-			const rect = event.currentTarget.getBoundingClientRect();
+	const handleMinimapNavigate = useCallback(
+		(point: Point) => {
 			const worldPoint = {
-				x: (event.clientX - rect.left) / minimapScale,
-				y: (event.clientY - rect.top) / minimapScale,
+				x: point.x / minimapScale + minimapOrigin.x,
+				y: point.y / minimapScale + minimapOrigin.y,
 			};
 			updateView({
 				x: viewportSize.width / 2 - worldPoint.x * viewRef.current.zoom,
@@ -161,13 +176,27 @@ export function useCanvasViewport({ nodes, onFit }: UseCanvasViewportOptions) {
 				zoom: viewRef.current.zoom,
 			});
 		},
-		[minimapScale, updateView, viewportSize],
+		[minimapOrigin.x, minimapOrigin.y, minimapScale, updateView, viewportSize],
+	);
+	const handleMinimapViewportDrag = useCallback(
+		(delta: Point) => {
+			const currentView = viewRef.current;
+			updateView({
+				x: currentView.x - (delta.x / minimapScale) * currentView.zoom,
+				y: currentView.y - (delta.y / minimapScale) * currentView.zoom,
+				zoom: currentView.zoom,
+			});
+		},
+		[minimapScale, updateView],
 	);
 
 	return {
 		canvasPosition,
 		fitView,
-		handleMinimapClick,
+		handleMinimapNavigate,
+		handleMinimapViewportDrag,
+		minimapOrigin,
+		minimapScale,
 		minimapViewport,
 		resetZoom,
 		updateView,

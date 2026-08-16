@@ -191,7 +191,7 @@ export const syncGroupMembership = (nodes: DiagramNode[]) => {
 		else delete nextNode.parentId;
 		return nextNode;
 	});
-	return changed ? nextNodes : nodes;
+	return syncGroupSummaries(changed ? nextNodes : nodes);
 };
 
 export const getDescendantIds = (nodes: DiagramNode[], parentId: string) => {
@@ -211,6 +211,29 @@ export const getDescendantIds = (nodes: DiagramNode[], parentId: string) => {
 		}
 	}
 	return descendants;
+};
+
+const isGeneratedGroupSubtitle = (subtitle: string) =>
+	/^\d+ nodes?(?: · press .+ to group again)?$/.test(subtitle);
+
+export const formatGroupNodeCount = (count: number) =>
+	`${count} ${count === 1 ? "node" : "nodes"}`;
+
+export const syncGroupSummaries = (nodes: DiagramNode[]) => {
+	const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+	let changed = false;
+	const nextNodes = nodes.map((node) => {
+		if (node.type !== "group" || !isGeneratedGroupSubtitle(node.subtitle))
+			return node;
+		const count = [...getDescendantIds(nodes, node.id)].filter(
+			(id) => nodeMap.get(id)?.type !== "group",
+		).length;
+		const subtitle = formatGroupNodeCount(count);
+		if (subtitle === node.subtitle) return node;
+		changed = true;
+		return { ...node, subtitle };
+	});
+	return changed ? nextNodes : nodes;
 };
 
 export const getBounds = (nodes: DiagramNode[]) => {

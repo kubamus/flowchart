@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { INITIAL_EDGES, INITIAL_NODES } from "../features/editor/data";
-import { hasOverlappingGroups } from "../features/editor/geometry";
+import {
+	hasOverlappingGroups,
+	syncGroupSummaries,
+} from "../features/editor/geometry";
 import type {
 	DiagramEdge,
 	DiagramNode,
@@ -40,15 +43,16 @@ export function useDiagramHistory({
 				return false;
 			}
 
-			nodesRef.current = nextNodes;
+			const normalizedNodes = syncGroupSummaries(nextNodes);
+			nodesRef.current = normalizedNodes;
 			edgesRef.current = nextEdges;
-			setNodes(nextNodes);
+			setNodes(normalizedNodes);
 			setEdges(nextEdges);
 
 			const nextIndex = historyIndexRef.current + 1;
 			historyRef.current = [
 				...historyRef.current.slice(0, nextIndex),
-				{ nodes: nextNodes, edges: nextEdges },
+				{ nodes: normalizedNodes, edges: nextEdges },
 			];
 			historyIndexRef.current = nextIndex;
 			setHistoryIndex(nextIndex);

@@ -1,3 +1,6 @@
+import type { Hotkey } from "@tanstack/react-hotkeys";
+import { formatForDisplay } from "@tanstack/react-hotkeys";
+
 export const makeId = (prefix: string) =>
 	`${prefix}-${Math.random().toString(36).slice(2, 9)}`;
 
@@ -15,3 +18,5 @@ export const escapeXml = (value: string) =>
 		.replaceAll('"', "&quot;");
 
 export const formatNumber = (value: number) => Math.round(value * 10) / 10;
+
+export const formatShortcut = (hotkey: Hotkey) => formatForDisplay(hotkey);

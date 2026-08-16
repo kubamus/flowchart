@@ -6,7 +6,7 @@ import {
 	nodeIcon,
 	nodeTypeLabel,
 } from "../../features/editor/data";
-import { clamp } from "../../features/editor/helpers";
+import { clamp, formatShortcut } from "../../features/editor/helpers";
 import type {
 	ContextMenuState,
 	DiagramEdge,
@@ -535,7 +535,7 @@ export function LayersPanel({
 					placeholder="Search layers"
 					value={query}
 				/>
-				<kbd>⌘ F</kbd>
+				<kbd>{formatShortcut("Mod+F")}</kbd>
 			</div>
 			<div className="layers-list">
 				{groups.map((group) => (
@@ -670,7 +670,7 @@ export function ContextMenu({
 			>
 				<Icon name="duplicate" size={14} />
 				<span>Duplicate</span>
-				<kbd>⌘ D</kbd>
+				<kbd>{formatShortcut("Mod+D")}</kbd>
 			</button>
 			<button
 				onClick={() => {
@@ -681,7 +681,7 @@ export function ContextMenu({
 			>
 				<Icon name="copy" size={14} />
 				<span>Paste here</span>
-				<kbd>⌘ V</kbd>
+				<kbd>{formatShortcut("Mod+V")}</kbd>
 			</button>
 			<div className="menu-divider" />
 			<button
@@ -693,7 +693,7 @@ export function ContextMenu({
 			>
 				<Icon name="group" size={14} />
 				<span>Group selection</span>
-				<kbd>⌘ G</kbd>
+				<kbd>{formatShortcut("Mod+G")}</kbd>
 			</button>
 			<button
 				onClick={() => {
@@ -704,7 +704,7 @@ export function ContextMenu({
 			>
 				<Icon name="layers" size={14} />
 				<span>Ungroup</span>
-				<kbd>⇧⌘ G</kbd>
+				<kbd>{formatShortcut("Mod+Shift+G")}</kbd>
 			</button>
 			<button
 				onClick={() => {

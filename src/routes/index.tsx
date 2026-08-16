@@ -42,11 +42,13 @@ import {
 	getVisibleNodes,
 	getWorldPoint,
 	hasOverlappingGroups,
+	formatGroupNodeCount,
 	rectanglesOverlap,
 	syncGroupMembership,
 } from "../features/editor/geometry";
 import {
 	escapeXml,
+	formatShortcut,
 	formatNumber,
 	makeId,
 	snap,
@@ -124,7 +126,10 @@ function FlwchrtEditor() {
 	const {
 		canvasPosition,
 		fitView,
-		handleMinimapClick,
+		handleMinimapNavigate,
+		handleMinimapViewportDrag,
+		minimapOrigin,
+		minimapScale,
 		minimapViewport,
 		resetZoom,
 		updateView,
@@ -340,6 +345,7 @@ function FlwchrtEditor() {
 	const handleNodePointerDown = useCallback(
 		(event: ReactPointerEvent<HTMLDivElement>, nodeId: string) => {
 			if (event.button !== 0) return;
+			event.preventDefault();
 			const node = nodesRef.current.find((item) => item.id === nodeId);
 			if (!node) return;
 			setContextMenu(null);
@@ -394,6 +400,7 @@ function FlwchrtEditor() {
 	const beginResize = useCallback(
 		(event: ReactPointerEvent<HTMLButtonElement>, node: DiagramNode) => {
 			event.stopPropagation();
+			event.preventDefault();
 			if (node.locked) return;
 			interactionRef.current = {
 				mode: "resize",
@@ -410,6 +417,7 @@ function FlwchrtEditor() {
 	const beginRotate = useCallback(
 		(event: ReactPointerEvent<HTMLButtonElement>, node: DiagramNode) => {
 			event.stopPropagation();
+			event.preventDefault();
 			if (node.locked) return;
 			const center = getNodeCenter(node);
 			const point = getWorldPoint(event, viewportRef.current, viewRef.current);
@@ -556,7 +564,7 @@ function FlwchrtEditor() {
 						: node;
 				});
 				if (hasOverlappingGroups(nextNodes)) return;
-				updateNodesLive(() => nextNodes);
+				updateNodesLive(() => syncGroupMembership(nextNodes));
 			}
 		},
 		[
@@ -664,6 +672,7 @@ function FlwchrtEditor() {
 	const handleCanvasPointerDown = useCallback(
 		(event: ReactPointerEvent<HTMLDivElement>) => {
 			if (event.button !== 0 && event.button !== 1) return;
+			event.preventDefault();
 			const activeElement = document.activeElement;
 			if (
 				activeElement instanceof HTMLInputElement ||
@@ -872,7 +881,7 @@ function FlwchrtEditor() {
 			width: bounds.width + 56,
 			height: bounds.height + 86,
 			title: "New group",
-			subtitle: `${groupable.length} nodes · press ⌘G to group again`,
+			subtitle: formatGroupNodeCount(groupable.length),
 			color: "blue",
 			locked: false,
 			rotation: 0,
@@ -1124,7 +1133,7 @@ function FlwchrtEditor() {
 			},
 			{
 				label: "Group selected nodes",
-				detail: "⌘G",
+				detail: formatShortcut("Mod+G"),
 				icon: "group" as IconName,
 				action: groupSelection,
 			},
@@ -1241,7 +1250,10 @@ function FlwchrtEditor() {
 	);
 
 	const stageStyle: CSSProperties = {
-		transform: `translate3d(${view.x}px, ${view.y}px, 0) scale(${view.zoom})`,
+		left: view.x / view.zoom,
+		top: view.y / view.zoom,
+		transform: "none",
+		zoom: view.zoom,
 	};
 	const viewportStyle: CSSProperties = {
 		backgroundPosition: `${view.x}px ${view.y}px`,
@@ -1291,7 +1303,7 @@ function FlwchrtEditor() {
 					>
 						<Icon name="search" size={15} />
 						<span>Search</span>
-						<kbd>⌘ K</kbd>
+						<kbd>{formatShortcut("Mod+K")}</kbd>
 					</button>
 					<button
 						aria-label="Share diagram"
@@ -1320,7 +1332,7 @@ function FlwchrtEditor() {
 							<div className="export-menu">
 								<button onClick={exportPng} type="button">
 									<Icon name="download" size={14} />
-									Export PNG<span>⌘⇧P</span>
+									Export PNG<span>{formatShortcut("Mod+Shift+P")}</span>
 								</button>
 								<button onClick={exportSvg} type="button">
 									<Icon name="link" size={14} />
@@ -1475,7 +1487,9 @@ function FlwchrtEditor() {
 					<div
 						aria-label="Infinite diagram canvas"
 						className={`canvas-viewport${tool === "hand" ? " hand-mode" : ""}${tool === "note" ? " note-mode" : ""}${tool === "text" ? " text-mode" : ""}${spacePressed ? " space-mode" : ""}${showGrid ? " show-grid" : ""}`}
+						draggable={false}
 						onContextMenu={handleContextMenu}
+						onDragStart={(event) => event.preventDefault()}
 						onPointerDown={handleCanvasPointerDown}
 						onPointerMove={handleCanvasPointerMove}
 						onPointerLeave={() => setNoteCursor(null)}
@@ -1484,7 +1498,7 @@ function FlwchrtEditor() {
 						role="application"
 						style={viewportStyle}
 					>
-						<div className="diagram-stage" style={stageStyle}>
+						<div className="diagram-stage" draggable={false} style={stageStyle}>
 							<div className="stage-origin" aria-hidden="true">
 								<span>0, 0</span>
 							</div>
@@ -1580,9 +1594,17 @@ function FlwchrtEditor() {
 							) : null}
 						</div>
 						<MiniMap
+							edges={edges}
 							nodes={visibleNodes}
-							onClick={handleMinimapClick}
+							onFit={fitView}
+							onFocusNode={focusNode}
+							onNavigate={handleMinimapNavigate}
+							onViewportDrag={handleMinimapViewportDrag}
+							origin={minimapOrigin}
+							selectedIds={selectedIds}
+							scale={minimapScale}
 							viewport={minimapViewport}
+							zoom={view.zoom}
 						/>
 						<div
 							className="zoom-controls"
@@ -1634,7 +1656,7 @@ function FlwchrtEditor() {
 								<kbd>Space</kbd> pan
 							</span>
 							<span>
-								<kbd>⌘</kbd> select multiple
+								<kbd>Shift</kbd> select multiple
 							</span>
 							<span>
 								<kbd>?</kbd> shortcuts

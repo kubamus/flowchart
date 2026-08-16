@@ -11,36 +11,38 @@ import type {
 export const WORLD_WIDTH = 1600;
 export const WORLD_HEIGHT = 1100;
 export const GRID_SIZE = 24;
+export const MINIMAP_WIDTH = 174;
+export const MINIMAP_HEIGHT = 110;
 
 export const COLOR_META: Record<
 	NodeColor,
 	{ label: string; fill: string; border: string; text: string }
 > = {
-	blue: { label: "Blue", fill: "#e8f2ff", border: "#a7c9ff", text: "#1f5fbb" },
+	blue: { label: "Blue", fill: "#eaf2ff", border: "#abc7f2", text: "#2e63b4" },
 	violet: {
 		label: "Violet",
-		fill: "#f1ecff",
-		border: "#c8b8ff",
-		text: "#6541bb",
+		fill: "#f2edff",
+		border: "#c9b9ee",
+		text: "#6244ab",
 	},
-	mint: { label: "Mint", fill: "#e9f8f2", border: "#a9dfc7", text: "#267b5c" },
+	mint: { label: "Mint", fill: "#eaf8f2", border: "#acd9c3", text: "#28775b" },
 	coral: {
 		label: "Coral",
-		fill: "#fff0eb",
-		border: "#f5b9a9",
-		text: "#a64a35",
+		fill: "#fff1ed",
+		border: "#efb9aa",
+		text: "#a14e3a",
 	},
 	yellow: {
 		label: "Yellow",
-		fill: "#fff8de",
-		border: "#eed488",
-		text: "#8a6715",
+		fill: "#fff8e1",
+		border: "#e8ce83",
+		text: "#856516",
 	},
 	slate: {
 		label: "Slate",
-		fill: "#eef1f4",
-		border: "#c8d0da",
-		text: "#53616f",
+		fill: "#eff2f5",
+		border: "#c9d1db",
+		text: "#526171",
 	},
 };
 
