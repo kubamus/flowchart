@@ -1,6 +1,10 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { useHotkey, useHotkeys } from "@tanstack/react-hotkeys";
 import type { Hotkey, UseHotkeyDefinition } from "@tanstack/react-hotkeys";
+import {
+	formatForDisplay,
+	useHotkey,
+	useHotkeys,
+} from "@tanstack/react-hotkeys";
+import { createFileRoute } from "@tanstack/react-router";
 import type {
 	ChangeEvent,
 	CSSProperties,
@@ -128,36 +132,38 @@ interface ContextMenuState {
 const WORLD_WIDTH = 1600;
 const WORLD_HEIGHT = 1100;
 const GRID_SIZE = 24;
+const MINIMAP_WIDTH = 174;
+const MINIMAP_HEIGHT = 110;
 
 const COLOR_META: Record<
 	NodeColor,
 	{ label: string; fill: string; border: string; text: string }
 > = {
-	blue: { label: "Blue", fill: "#e8f2ff", border: "#a7c9ff", text: "#1f5fbb" },
+	blue: { label: "Blue", fill: "#eaf2ff", border: "#abc7f2", text: "#2e63b4" },
 	violet: {
 		label: "Violet",
-		fill: "#f1ecff",
-		border: "#c8b8ff",
-		text: "#6541bb",
+		fill: "#f2edff",
+		border: "#c9b9ee",
+		text: "#6244ab",
 	},
-	mint: { label: "Mint", fill: "#e9f8f2", border: "#a9dfc7", text: "#267b5c" },
+	mint: { label: "Mint", fill: "#eaf8f2", border: "#acd9c3", text: "#28775b" },
 	coral: {
 		label: "Coral",
-		fill: "#fff0eb",
-		border: "#f5b9a9",
-		text: "#a64a35",
+		fill: "#fff1ed",
+		border: "#efb9aa",
+		text: "#a14e3a",
 	},
 	yellow: {
 		label: "Yellow",
-		fill: "#fff8de",
-		border: "#eed488",
-		text: "#8a6715",
+		fill: "#fff8e1",
+		border: "#e8ce83",
+		text: "#856516",
 	},
 	slate: {
 		label: "Slate",
-		fill: "#eef1f4",
-		border: "#c8d0da",
-		text: "#53616f",
+		fill: "#eff2f5",
+		border: "#c9d1db",
+		text: "#526171",
 	},
 };
 
@@ -369,6 +375,8 @@ const escapeXml = (value: string) =>
 		.replaceAll('"', "&quot;");
 
 const formatNumber = (value: number) => Math.round(value * 10) / 10;
+
+const formatShortcut = (hotkey: Hotkey) => formatForDisplay(hotkey);
 
 const Icon = ({ name, size = 16 }: { name: IconName; size?: number }) => {
 	const common = {
@@ -796,7 +804,7 @@ const syncGroupMembership = (nodes: DiagramNode[]) => {
 		else delete nextNode.parentId;
 		return nextNode;
 	});
-	return changed ? nextNodes : nodes;
+	return syncGroupSummaries(changed ? nextNodes : nodes);
 };
 
 const getDescendantIds = (nodes: DiagramNode[], parentId: string) => {
@@ -816,6 +824,29 @@ const getDescendantIds = (nodes: DiagramNode[], parentId: string) => {
 		}
 	}
 	return descendants;
+};
+
+const isGeneratedGroupSubtitle = (subtitle: string) =>
+	/^\d+ nodes?(?: · press .+ to group again)?$/.test(subtitle);
+
+const formatGroupNodeCount = (count: number) =>
+	`${count} ${count === 1 ? "node" : "nodes"}`;
+
+const syncGroupSummaries = (nodes: DiagramNode[]) => {
+	const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+	let changed = false;
+	const nextNodes = nodes.map((node) => {
+		if (node.type !== "group" || !isGeneratedGroupSubtitle(node.subtitle))
+			return node;
+		const count = [...getDescendantIds(nodes, node.id)].filter(
+			(id) => nodeMap.get(id)?.type !== "group",
+		).length;
+		const subtitle = formatGroupNodeCount(count);
+		if (subtitle === node.subtitle) return node;
+		changed = true;
+		return { ...node, subtitle };
+	});
+	return changed ? nextNodes : nodes;
 };
 
 const getBounds = (nodes: DiagramNode[]) => {
@@ -925,14 +956,15 @@ function FlwchrtEditor() {
 				showToast("Groups cannot overlap");
 				return false;
 			}
-			nodesRef.current = nextNodes;
+			const normalizedNodes = syncGroupSummaries(nextNodes);
+			nodesRef.current = normalizedNodes;
 			edgesRef.current = nextEdges;
-			setNodes(nextNodes);
+			setNodes(normalizedNodes);
 			setEdges(nextEdges);
 			const nextIndex = historyIndexRef.current + 1;
 			const nextHistory = [
 				...historyRef.current.slice(0, nextIndex),
-				{ nodes: nextNodes, edges: nextEdges },
+				{ nodes: normalizedNodes, edges: nextEdges },
 			];
 			historyRef.current = nextHistory;
 			historyIndexRef.current = nextIndex;
@@ -1050,6 +1082,20 @@ function FlwchrtEditor() {
 	}, [commandOpen, commandQuery]);
 
 	const visibleNodes = useMemo(() => getVisibleNodes(nodes), [nodes]);
+	const minimapLayout = useMemo(() => {
+		const bounds = getBounds(visibleNodes);
+		const padding = 80;
+		const width = Math.max(bounds.width + padding * 2, 1);
+		const height = Math.max(bounds.height + padding * 2, 1);
+
+		return {
+			origin: {
+				x: bounds.minX - padding,
+				y: bounds.minY - padding,
+			},
+			scale: Math.min(MINIMAP_WIDTH / width, MINIMAP_HEIGHT / height),
+		};
+	}, [visibleNodes]);
 	const visibleNodeIds = useMemo(
 		() => new Set(visibleNodes.map((node) => node.id)),
 		[visibleNodes],
@@ -1179,7 +1225,7 @@ function FlwchrtEditor() {
 			y: viewport.clientHeight / 2 - (bounds.minY + bounds.height / 2) * zoom,
 			zoom,
 		});
-		showToast("Fit to selection");
+		showToast("Diagram fitted");
 	}, [nodes, showToast, updateView]);
 
 	const zoomAt = useCallback(
@@ -1307,6 +1353,7 @@ function FlwchrtEditor() {
 	const handleNodePointerDown = useCallback(
 		(event: ReactPointerEvent<HTMLDivElement>, nodeId: string) => {
 			if (event.button !== 0) return;
+			event.preventDefault();
 			const node = nodesRef.current.find((item) => item.id === nodeId);
 			if (!node) return;
 			setContextMenu(null);
@@ -1361,6 +1408,7 @@ function FlwchrtEditor() {
 	const beginResize = useCallback(
 		(event: ReactPointerEvent<HTMLButtonElement>, node: DiagramNode) => {
 			event.stopPropagation();
+			event.preventDefault();
 			if (node.locked) return;
 			interactionRef.current = {
 				mode: "resize",
@@ -1377,6 +1425,7 @@ function FlwchrtEditor() {
 	const beginRotate = useCallback(
 		(event: ReactPointerEvent<HTMLButtonElement>, node: DiagramNode) => {
 			event.stopPropagation();
+			event.preventDefault();
 			if (node.locked) return;
 			const center = getNodeCenter(node);
 			const point = getWorldPoint(event, viewportRef.current, viewRef.current);
@@ -1523,7 +1572,7 @@ function FlwchrtEditor() {
 						: node;
 				});
 				if (hasOverlappingGroups(nextNodes)) return;
-				updateNodesLive(() => nextNodes);
+				updateNodesLive(() => syncGroupMembership(nextNodes));
 			}
 		},
 		[
@@ -1631,6 +1680,7 @@ function FlwchrtEditor() {
 	const handleCanvasPointerDown = useCallback(
 		(event: ReactPointerEvent<HTMLDivElement>) => {
 			if (event.button !== 0 && event.button !== 1) return;
+			event.preventDefault();
 			const activeElement = document.activeElement;
 			if (
 				activeElement instanceof HTMLInputElement ||
@@ -1839,7 +1889,7 @@ function FlwchrtEditor() {
 			width: bounds.width + 56,
 			height: bounds.height + 86,
 			title: "New group",
-			subtitle: `${groupable.length} nodes · press ⌘G to group again`,
+			subtitle: formatGroupNodeCount(groupable.length),
 			color: "blue",
 			locked: false,
 			rotation: 0,
@@ -2091,7 +2141,7 @@ function FlwchrtEditor() {
 			},
 			{
 				label: "Group selected nodes",
-				detail: "⌘G",
+				detail: formatShortcut("Mod+G"),
 				icon: "group" as IconName,
 				action: groupSelection,
 			},
@@ -2481,24 +2531,24 @@ function FlwchrtEditor() {
 		[selectSingle, selectedIds],
 	);
 
-	const minimapScale = 174 / WORLD_WIDTH;
-	const minimapViewport = {
-		x: (-view.x / view.zoom) * minimapScale,
-		y: (-view.y / view.zoom) * minimapScale,
-		width: (viewportSize.width / view.zoom) * minimapScale,
-		height: (viewportSize.height / view.zoom) * minimapScale,
-	};
+	const minimapScale = minimapLayout.scale;
+	const minimapOrigin = minimapLayout.origin;
 	const canvasPosition = {
 		x: -view.x / view.zoom,
 		y: -view.y / view.zoom,
 	};
+	const minimapViewport = {
+		x: (canvasPosition.x - minimapOrigin.x) * minimapScale,
+		y: (canvasPosition.y - minimapOrigin.y) * minimapScale,
+		width: (viewportSize.width / view.zoom) * minimapScale,
+		height: (viewportSize.height / view.zoom) * minimapScale,
+	};
 
-	const handleMinimapClick = useCallback(
-		(event: ReactMouseEvent<HTMLButtonElement>) => {
-			const rect = event.currentTarget.getBoundingClientRect();
+	const handleMinimapNavigate = useCallback(
+		(point: Point) => {
 			const worldPoint = {
-				x: (event.clientX - rect.left) / minimapScale,
-				y: (event.clientY - rect.top) / minimapScale,
+				x: point.x / minimapScale + minimapOrigin.x,
+				y: point.y / minimapScale + minimapOrigin.y,
 			};
 			updateView({
 				x: viewportSize.width / 2 - worldPoint.x * viewRef.current.zoom,
@@ -2506,11 +2556,25 @@ function FlwchrtEditor() {
 				zoom: viewRef.current.zoom,
 			});
 		},
-		[minimapScale, updateView, viewportSize],
+		[minimapOrigin.x, minimapOrigin.y, minimapScale, updateView, viewportSize],
+	);
+	const handleMinimapViewportDrag = useCallback(
+		(delta: Point) => {
+			const currentView = viewRef.current;
+			updateView({
+				x: currentView.x - (delta.x / minimapScale) * currentView.zoom,
+				y: currentView.y - (delta.y / minimapScale) * currentView.zoom,
+				zoom: currentView.zoom,
+			});
+		},
+		[minimapScale, updateView],
 	);
 
 	const stageStyle: CSSProperties = {
-		transform: `translate3d(${view.x}px, ${view.y}px, 0) scale(${view.zoom})`,
+		left: view.x / view.zoom,
+		top: view.y / view.zoom,
+		transform: "none",
+		zoom: view.zoom,
 	};
 	const viewportStyle: CSSProperties = {
 		backgroundPosition: `${view.x}px ${view.y}px`,
@@ -2560,7 +2624,7 @@ function FlwchrtEditor() {
 					>
 						<Icon name="search" size={15} />
 						<span>Search</span>
-						<kbd>⌘ K</kbd>
+						<kbd>{formatShortcut("Mod+K")}</kbd>
 					</button>
 					<button
 						aria-label="Share diagram"
@@ -2589,7 +2653,7 @@ function FlwchrtEditor() {
 							<div className="export-menu">
 								<button onClick={exportPng} type="button">
 									<Icon name="download" size={14} />
-									Export PNG<span>⌘⇧P</span>
+									Export PNG<span>{formatShortcut("Mod+Shift+P")}</span>
 								</button>
 								<button onClick={exportSvg} type="button">
 									<Icon name="link" size={14} />
@@ -2744,7 +2808,9 @@ function FlwchrtEditor() {
 					<div
 						aria-label="Infinite diagram canvas"
 						className={`canvas-viewport${tool === "hand" ? " hand-mode" : ""}${tool === "note" ? " note-mode" : ""}${tool === "text" ? " text-mode" : ""}${spacePressed ? " space-mode" : ""}${showGrid ? " show-grid" : ""}`}
+						draggable={false}
 						onContextMenu={handleContextMenu}
+						onDragStart={(event) => event.preventDefault()}
 						onPointerDown={handleCanvasPointerDown}
 						onPointerMove={handleCanvasPointerMove}
 						onPointerLeave={() => setNoteCursor(null)}
@@ -2753,7 +2819,7 @@ function FlwchrtEditor() {
 						role="application"
 						style={viewportStyle}
 					>
-						<div className="diagram-stage" style={stageStyle}>
+						<div className="diagram-stage" draggable={false} style={stageStyle}>
 							<div className="stage-origin" aria-hidden="true">
 								<span>0, 0</span>
 							</div>
@@ -2849,9 +2915,17 @@ function FlwchrtEditor() {
 							) : null}
 						</div>
 						<MiniMap
+							edges={edges}
 							nodes={visibleNodes}
-							onClick={handleMinimapClick}
+							onFit={fitView}
+							onFocusNode={focusNode}
+							onNavigate={handleMinimapNavigate}
+							onViewportDrag={handleMinimapViewportDrag}
+							origin={minimapOrigin}
+							selectedIds={selectedIds}
+							scale={minimapScale}
 							viewport={minimapViewport}
+							zoom={view.zoom}
 						/>
 						<div
 							className="zoom-controls"
@@ -2903,7 +2977,7 @@ function FlwchrtEditor() {
 								<kbd>Space</kbd> pan
 							</span>
 							<span>
-								<kbd>⌘</kbd> select multiple
+								<kbd>Shift</kbd> select multiple
 							</span>
 							<span>
 								<kbd>?</kbd> shortcuts
@@ -3063,6 +3137,7 @@ function EdgeLayer({
 							key={edge.id}
 							onPointerDown={(event) => {
 								event.stopPropagation();
+								event.preventDefault();
 								onSelect(edge.id);
 							}}
 						>
@@ -3154,6 +3229,7 @@ function NodeView({
 			aria-label={`${node.title}, ${nodeTypeLabel(node.type)}${node.locked ? ", locked" : ""}`}
 			className={`diagram-node node-${node.type} color-${node.color}${selected ? " selected" : ""}${node.locked ? " locked" : ""}${node.collapsed ? " collapsed" : ""}`}
 			data-node-id={node.id}
+			draggable={false}
 			onDoubleClick={(event) => {
 				event.stopPropagation();
 				onDoubleClick(node);
@@ -3183,6 +3259,7 @@ function NodeView({
 								event.stopPropagation();
 								onCollapse(node.id);
 							}}
+							onPointerDown={(event) => event.stopPropagation()}
 							type="button"
 						>
 							<Icon
@@ -3263,35 +3340,206 @@ function NodeView({
 }
 
 function MiniMap({
+	edges,
 	nodes,
 	viewport,
-	onClick,
+	selectedIds,
+	zoom,
+	onFit,
+	onFocusNode,
+	onNavigate,
+	onViewportDrag,
+	origin,
+	scale,
 }: {
+	edges: DiagramEdge[];
 	nodes: DiagramNode[];
+	origin: Point;
+	scale: number;
 	viewport: { x: number; y: number; width: number; height: number };
-	onClick: (event: ReactMouseEvent<HTMLButtonElement>) => void;
+	selectedIds: string[];
+	zoom: number;
+	onFit: () => void;
+	onFocusNode: (nodeId: string) => void;
+	onNavigate: (point: Point) => void;
+	onViewportDrag: (delta: Point) => void;
 }) {
-	const scale = 174 / WORLD_WIDTH;
+	const dragRef = useRef<{
+		mode: "canvas" | "viewport";
+		pointerId: number;
+		lastPoint: Point;
+	} | null>(null);
+	const blockCount = nodes.filter((node) => node.type !== "group").length;
+	const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+	const getLocalPoint = useCallback(
+		(event: ReactPointerEvent<HTMLDivElement>) => {
+			const rect = event.currentTarget.getBoundingClientRect();
+			return {
+				x: clamp(event.clientX - rect.left, 0, MINIMAP_WIDTH),
+				y: clamp(event.clientY - rect.top, 0, MINIMAP_HEIGHT),
+			};
+		},
+		[],
+	);
+	const handlePointerDown = useCallback(
+		(event: ReactPointerEvent<HTMLDivElement>) => {
+			if (event.button !== 0) return;
+			event.preventDefault();
+			event.stopPropagation();
+			const point = getLocalPoint(event);
+			const target = event.target as Element;
+			const isViewport = Boolean(target.closest(".minimap-viewport"));
+			dragRef.current = {
+				mode: isViewport ? "viewport" : "canvas",
+				pointerId: event.pointerId,
+				lastPoint: point,
+			};
+			event.currentTarget.setPointerCapture(event.pointerId);
+			if (!isViewport) onNavigate(point);
+		},
+		[getLocalPoint, onNavigate],
+	);
+	const handlePointerMove = useCallback(
+		(event: ReactPointerEvent<HTMLDivElement>) => {
+			const drag = dragRef.current;
+			if (!drag || drag.pointerId !== event.pointerId) return;
+			event.preventDefault();
+			event.stopPropagation();
+			const point = getLocalPoint(event);
+			const delta = {
+				x: point.x - drag.lastPoint.x,
+				y: point.y - drag.lastPoint.y,
+			};
+			if (delta.x === 0 && delta.y === 0) return;
+			if (drag.mode === "viewport") onViewportDrag(delta);
+			else onNavigate(point);
+			drag.lastPoint = point;
+		},
+		[getLocalPoint, onNavigate, onViewportDrag],
+	);
+	const handlePointerEnd = useCallback(
+		(event: ReactPointerEvent<HTMLDivElement>) => {
+			if (dragRef.current?.pointerId !== event.pointerId) return;
+			event.stopPropagation();
+			if (event.currentTarget.hasPointerCapture(event.pointerId))
+				event.currentTarget.releasePointerCapture(event.pointerId);
+			dragRef.current = null;
+		},
+		[],
+	);
+	const handleNodeKeyDown = useCallback(
+		(event: ReactKeyboardEvent<HTMLButtonElement>, nodeId: string) => {
+			if (event.key !== "Enter" && event.key !== " ") return;
+			event.preventDefault();
+			event.stopPropagation();
+			onFocusNode(nodeId);
+		},
+		[onFocusNode],
+	);
+	const toMinimapPoint = useCallback(
+		(point: Point) => ({
+			x: (point.x - origin.x) * scale,
+			y: (point.y - origin.y) * scale,
+		}),
+		[origin.x, origin.y, scale],
+	);
+	const getMinimapRect = useCallback(
+		(node: DiagramNode) => {
+			const point = toMinimapPoint(node);
+			return {
+				left: point.x,
+				top: point.y,
+				width: node.width * scale,
+				height: node.height * scale,
+			};
+		},
+		[scale, toMinimapPoint],
+	);
 	return (
-		<button
-			aria-label="Diagram minimap"
+		<section
+			aria-label="Diagram overview"
 			className="minimap"
-			onClick={onClick}
-			type="button"
+			onPointerDown={(event) => event.stopPropagation()}
 		>
-			<div className="minimap-canvas">
+			<div className="minimap-header">
+				<div className="minimap-title">
+					<strong>Overview</strong>
+					<span>{blockCount} blocks</span>
+				</div>
+				<button
+					aria-label="Fit diagram to view"
+					className="minimap-fit"
+					data-tooltip="Fit diagram to view"
+					data-tooltip-placement="top"
+					onClick={onFit}
+					type="button"
+				>
+					<Icon name="fit" size={13} />
+				</button>
+			</div>
+			<div
+				className="minimap-canvas"
+				onPointerCancel={handlePointerEnd}
+				onPointerDown={handlePointerDown}
+				onPointerMove={handlePointerMove}
+				onPointerUp={handlePointerEnd}
+			>
+				<svg
+					aria-hidden="true"
+					className="minimap-edges"
+					height={MINIMAP_HEIGHT}
+					viewBox={`0 0 ${MINIMAP_WIDTH} ${MINIMAP_HEIGHT}`}
+					width={MINIMAP_WIDTH}
+				>
+					{edges.map((edge) => {
+						const source = nodeMap.get(edge.source);
+						const target = nodeMap.get(edge.target);
+						if (!source || !target) return null;
+						const sourcePoint = toMinimapPoint({
+							x: source.x + source.width / 2,
+							y: source.y + source.height / 2,
+						});
+						const targetPoint = toMinimapPoint({
+							x: target.x + target.width / 2,
+							y: target.y + target.height / 2,
+						});
+						return (
+							<line
+								className="minimap-edge"
+								key={edge.id}
+								x1={sourcePoint.x}
+								x2={targetPoint.x}
+								y1={sourcePoint.y}
+								y2={targetPoint.y}
+							/>
+						);
+					})}
+				</svg>
+				{nodes
+					.filter((node) => node.type === "group")
+					.map((node) => (
+						<span
+							aria-hidden="true"
+							className={`minimap-group minimap-${node.color}`}
+							key={node.id}
+							style={getMinimapRect(node)}
+						/>
+					))}
 				{nodes
 					.filter((node) => node.type !== "group")
 					.map((node) => (
-						<span
-							className={`minimap-node minimap-${node.color}`}
+						<button
+							aria-label={`Focus ${node.title}`}
+							className={`minimap-node minimap-${node.color}${selectedIds.includes(node.id) ? " selected" : ""}`}
 							key={node.id}
-							style={{
-								left: node.x * scale,
-								top: node.y * scale,
-								width: node.width * scale,
-								height: node.height * scale,
+							onClick={(event) => {
+								event.stopPropagation();
+								onFocusNode(node.id);
 							}}
+							onKeyDown={(event) => handleNodeKeyDown(event, node.id)}
+							onPointerDown={(event) => event.stopPropagation()}
+							style={getMinimapRect(node)}
+							type="button"
 						/>
 					))}
 				<span
@@ -3304,11 +3552,14 @@ function MiniMap({
 					}}
 				/>
 			</div>
-			<div className="minimap-label">
-				<Icon name="move" size={12} />
-				Overview
+			<div className="minimap-footer">
+				<span>
+					<Icon name="move" size={11} />
+					Drag to pan
+				</span>
+				<strong>{Math.round(zoom * 100)}%</strong>
 			</div>
-		</button>
+		</section>
 	);
 }
 
@@ -3802,7 +4053,7 @@ function LayersPanel({
 					placeholder="Search layers"
 					value={query}
 				/>
-				<kbd>⌘ F</kbd>
+				<kbd>{formatShortcut("Mod+F")}</kbd>
 			</div>
 			<div className="layers-list">
 				{groups.map((group) => (
@@ -3937,7 +4188,7 @@ function ContextMenu({
 			>
 				<Icon name="duplicate" size={14} />
 				<span>Duplicate</span>
-				<kbd>⌘ D</kbd>
+				<kbd>{formatShortcut("Mod+D")}</kbd>
 			</button>
 			<button
 				onClick={() => {
@@ -3948,7 +4199,7 @@ function ContextMenu({
 			>
 				<Icon name="copy" size={14} />
 				<span>Paste here</span>
-				<kbd>⌘ V</kbd>
+				<kbd>{formatShortcut("Mod+V")}</kbd>
 			</button>
 			<div className="menu-divider" />
 			<button
@@ -3960,7 +4211,7 @@ function ContextMenu({
 			>
 				<Icon name="group" size={14} />
 				<span>Group selection</span>
-				<kbd>⌘ G</kbd>
+				<kbd>{formatShortcut("Mod+G")}</kbd>
 			</button>
 			<button
 				onClick={() => {
@@ -3971,7 +4222,7 @@ function ContextMenu({
 			>
 				<Icon name="layers" size={14} />
 				<span>Ungroup</span>
-				<kbd>⇧⌘ G</kbd>
+				<kbd>{formatShortcut("Mod+Shift+G")}</kbd>
 			</button>
 			<button
 				onClick={() => {
