@@ -1,6 +1,10 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { useHotkey, useHotkeys } from "@tanstack/react-hotkeys";
 import type { Hotkey, UseHotkeyDefinition } from "@tanstack/react-hotkeys";
+import {
+	formatForDisplay,
+	useHotkey,
+	useHotkeys,
+} from "@tanstack/react-hotkeys";
+import { createFileRoute } from "@tanstack/react-router";
 import type {
 	ChangeEvent,
 	CSSProperties,
@@ -369,6 +373,8 @@ const escapeXml = (value: string) =>
 		.replaceAll('"', "&quot;");
 
 const formatNumber = (value: number) => Math.round(value * 10) / 10;
+
+const formatShortcut = (hotkey: Hotkey) => formatForDisplay(hotkey);
 
 const Icon = ({ name, size = 16 }: { name: IconName; size?: number }) => {
 	const common = {
@@ -796,7 +802,7 @@ const syncGroupMembership = (nodes: DiagramNode[]) => {
 		else delete nextNode.parentId;
 		return nextNode;
 	});
-	return changed ? nextNodes : nodes;
+	return syncGroupSummaries(changed ? nextNodes : nodes);
 };
 
 const getDescendantIds = (nodes: DiagramNode[], parentId: string) => {
@@ -816,6 +822,29 @@ const getDescendantIds = (nodes: DiagramNode[], parentId: string) => {
 		}
 	}
 	return descendants;
+};
+
+const isGeneratedGroupSubtitle = (subtitle: string) =>
+	/^\d+ nodes?(?: · press .+ to group again)?$/.test(subtitle);
+
+const formatGroupNodeCount = (count: number) =>
+	`${count} ${count === 1 ? "node" : "nodes"}`;
+
+const syncGroupSummaries = (nodes: DiagramNode[]) => {
+	const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+	let changed = false;
+	const nextNodes = nodes.map((node) => {
+		if (node.type !== "group" || !isGeneratedGroupSubtitle(node.subtitle))
+			return node;
+		const count = [...getDescendantIds(nodes, node.id)].filter(
+			(id) => nodeMap.get(id)?.type !== "group",
+		).length;
+		const subtitle = formatGroupNodeCount(count);
+		if (subtitle === node.subtitle) return node;
+		changed = true;
+		return { ...node, subtitle };
+	});
+	return changed ? nextNodes : nodes;
 };
 
 const getBounds = (nodes: DiagramNode[]) => {
@@ -925,14 +954,15 @@ function FlwchrtEditor() {
 				showToast("Groups cannot overlap");
 				return false;
 			}
-			nodesRef.current = nextNodes;
+			const normalizedNodes = syncGroupSummaries(nextNodes);
+			nodesRef.current = normalizedNodes;
 			edgesRef.current = nextEdges;
-			setNodes(nextNodes);
+			setNodes(normalizedNodes);
 			setEdges(nextEdges);
 			const nextIndex = historyIndexRef.current + 1;
 			const nextHistory = [
 				...historyRef.current.slice(0, nextIndex),
-				{ nodes: nextNodes, edges: nextEdges },
+				{ nodes: normalizedNodes, edges: nextEdges },
 			];
 			historyRef.current = nextHistory;
 			historyIndexRef.current = nextIndex;
@@ -1307,6 +1337,7 @@ function FlwchrtEditor() {
 	const handleNodePointerDown = useCallback(
 		(event: ReactPointerEvent<HTMLDivElement>, nodeId: string) => {
 			if (event.button !== 0) return;
+			event.preventDefault();
 			const node = nodesRef.current.find((item) => item.id === nodeId);
 			if (!node) return;
 			setContextMenu(null);
@@ -1361,6 +1392,7 @@ function FlwchrtEditor() {
 	const beginResize = useCallback(
 		(event: ReactPointerEvent<HTMLButtonElement>, node: DiagramNode) => {
 			event.stopPropagation();
+			event.preventDefault();
 			if (node.locked) return;
 			interactionRef.current = {
 				mode: "resize",
@@ -1377,6 +1409,7 @@ function FlwchrtEditor() {
 	const beginRotate = useCallback(
 		(event: ReactPointerEvent<HTMLButtonElement>, node: DiagramNode) => {
 			event.stopPropagation();
+			event.preventDefault();
 			if (node.locked) return;
 			const center = getNodeCenter(node);
 			const point = getWorldPoint(event, viewportRef.current, viewRef.current);
@@ -1523,7 +1556,7 @@ function FlwchrtEditor() {
 						: node;
 				});
 				if (hasOverlappingGroups(nextNodes)) return;
-				updateNodesLive(() => nextNodes);
+				updateNodesLive(() => syncGroupMembership(nextNodes));
 			}
 		},
 		[
@@ -1631,6 +1664,7 @@ function FlwchrtEditor() {
 	const handleCanvasPointerDown = useCallback(
 		(event: ReactPointerEvent<HTMLDivElement>) => {
 			if (event.button !== 0 && event.button !== 1) return;
+			event.preventDefault();
 			const activeElement = document.activeElement;
 			if (
 				activeElement instanceof HTMLInputElement ||
@@ -1839,7 +1873,7 @@ function FlwchrtEditor() {
 			width: bounds.width + 56,
 			height: bounds.height + 86,
 			title: "New group",
-			subtitle: `${groupable.length} nodes · press ⌘G to group again`,
+			subtitle: formatGroupNodeCount(groupable.length),
 			color: "blue",
 			locked: false,
 			rotation: 0,
@@ -2091,7 +2125,7 @@ function FlwchrtEditor() {
 			},
 			{
 				label: "Group selected nodes",
-				detail: "⌘G",
+				detail: formatShortcut("Mod+G"),
 				icon: "group" as IconName,
 				action: groupSelection,
 			},
@@ -2510,7 +2544,10 @@ function FlwchrtEditor() {
 	);
 
 	const stageStyle: CSSProperties = {
-		transform: `translate3d(${view.x}px, ${view.y}px, 0) scale(${view.zoom})`,
+		left: view.x / view.zoom,
+		top: view.y / view.zoom,
+		transform: "none",
+		zoom: view.zoom,
 	};
 	const viewportStyle: CSSProperties = {
 		backgroundPosition: `${view.x}px ${view.y}px`,
@@ -2560,7 +2597,7 @@ function FlwchrtEditor() {
 					>
 						<Icon name="search" size={15} />
 						<span>Search</span>
-						<kbd>⌘ K</kbd>
+						<kbd>{formatShortcut("Mod+K")}</kbd>
 					</button>
 					<button
 						aria-label="Share diagram"
@@ -2589,7 +2626,7 @@ function FlwchrtEditor() {
 							<div className="export-menu">
 								<button onClick={exportPng} type="button">
 									<Icon name="download" size={14} />
-									Export PNG<span>⌘⇧P</span>
+									Export PNG<span>{formatShortcut("Mod+Shift+P")}</span>
 								</button>
 								<button onClick={exportSvg} type="button">
 									<Icon name="link" size={14} />
@@ -2744,7 +2781,9 @@ function FlwchrtEditor() {
 					<div
 						aria-label="Infinite diagram canvas"
 						className={`canvas-viewport${tool === "hand" ? " hand-mode" : ""}${tool === "note" ? " note-mode" : ""}${tool === "text" ? " text-mode" : ""}${spacePressed ? " space-mode" : ""}${showGrid ? " show-grid" : ""}`}
+						draggable={false}
 						onContextMenu={handleContextMenu}
+						onDragStart={(event) => event.preventDefault()}
 						onPointerDown={handleCanvasPointerDown}
 						onPointerMove={handleCanvasPointerMove}
 						onPointerLeave={() => setNoteCursor(null)}
@@ -2753,7 +2792,7 @@ function FlwchrtEditor() {
 						role="application"
 						style={viewportStyle}
 					>
-						<div className="diagram-stage" style={stageStyle}>
+						<div className="diagram-stage" draggable={false} style={stageStyle}>
 							<div className="stage-origin" aria-hidden="true">
 								<span>0, 0</span>
 							</div>
@@ -2903,7 +2942,7 @@ function FlwchrtEditor() {
 								<kbd>Space</kbd> pan
 							</span>
 							<span>
-								<kbd>⌘</kbd> select multiple
+								<kbd>Shift</kbd> select multiple
 							</span>
 							<span>
 								<kbd>?</kbd> shortcuts
@@ -3063,6 +3102,7 @@ function EdgeLayer({
 							key={edge.id}
 							onPointerDown={(event) => {
 								event.stopPropagation();
+								event.preventDefault();
 								onSelect(edge.id);
 							}}
 						>
@@ -3154,6 +3194,7 @@ function NodeView({
 			aria-label={`${node.title}, ${nodeTypeLabel(node.type)}${node.locked ? ", locked" : ""}`}
 			className={`diagram-node node-${node.type} color-${node.color}${selected ? " selected" : ""}${node.locked ? " locked" : ""}${node.collapsed ? " collapsed" : ""}`}
 			data-node-id={node.id}
+			draggable={false}
 			onDoubleClick={(event) => {
 				event.stopPropagation();
 				onDoubleClick(node);
@@ -3183,6 +3224,7 @@ function NodeView({
 								event.stopPropagation();
 								onCollapse(node.id);
 							}}
+							onPointerDown={(event) => event.stopPropagation()}
 							type="button"
 						>
 							<Icon
@@ -3802,7 +3844,7 @@ function LayersPanel({
 					placeholder="Search layers"
 					value={query}
 				/>
-				<kbd>⌘ F</kbd>
+				<kbd>{formatShortcut("Mod+F")}</kbd>
 			</div>
 			<div className="layers-list">
 				{groups.map((group) => (
@@ -3937,7 +3979,7 @@ function ContextMenu({
 			>
 				<Icon name="duplicate" size={14} />
 				<span>Duplicate</span>
-				<kbd>⌘ D</kbd>
+				<kbd>{formatShortcut("Mod+D")}</kbd>
 			</button>
 			<button
 				onClick={() => {
@@ -3948,7 +3990,7 @@ function ContextMenu({
 			>
 				<Icon name="copy" size={14} />
 				<span>Paste here</span>
-				<kbd>⌘ V</kbd>
+				<kbd>{formatShortcut("Mod+V")}</kbd>
 			</button>
 			<div className="menu-divider" />
 			<button
@@ -3960,7 +4002,7 @@ function ContextMenu({
 			>
 				<Icon name="group" size={14} />
 				<span>Group selection</span>
-				<kbd>⌘ G</kbd>
+				<kbd>{formatShortcut("Mod+G")}</kbd>
 			</button>
 			<button
 				onClick={() => {
@@ -3971,7 +4013,7 @@ function ContextMenu({
 			>
 				<Icon name="layers" size={14} />
 				<span>Ungroup</span>
-				<kbd>⇧⌘ G</kbd>
+				<kbd>{formatShortcut("Mod+Shift+G")}</kbd>
 			</button>
 			<button
 				onClick={() => {

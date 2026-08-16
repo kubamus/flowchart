@@ -602,6 +602,7 @@ kbd {
 	overflow: clip;
 	overscroll-behavior: none;
 	touch-action: none;
+	user-select: none;
 	background-color: #f8fafc;
 	background-image: radial-gradient(circle at 1px 1px, var(--grid-dot) 1px, transparent 1.1px);
 	cursor: default;
@@ -646,8 +647,12 @@ kbd {
 	width: 1600px;
 	height: 1100px;
 	transform-origin: 0 0;
-	will-change: transform;
 	pointer-events: none;
+}
+
+.diagram-stage,
+.diagram-stage * {
+	-webkit-user-drag: none;
 }
 
 .stage-origin {
@@ -848,6 +853,7 @@ kbd {
 	font-weight: 720;
 	letter-spacing: -0.015em;
 	background: rgba(255, 255, 255, 0.8);
+	user-select: text;
 }
 
 .node-start,
